@@ -1,6 +1,7 @@
 import asyncio
 import time
 import datetime
+from datetime import datetime as dt
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -272,7 +273,7 @@ class AvellanedaStoikovMM:
         """Update PnL and performance metrics."""
         mark_to_market = self.cash + self.inventory * mid_price
         
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
         self.mid_price_history.append(mid_price)
         self.pnl_history.append(mark_to_market)
         self.inventory_history.append(self.inventory)
@@ -294,7 +295,7 @@ class AvellanedaStoikovMM:
         mid_price = self.order_book.get_mid_price()
         
         self.trading_history.append({
-            'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'timestamp': dt.now().strftime("%Y-%m-%d %H:%M:%S"),
             'side': side,
             'price': price,
             'size': size,
