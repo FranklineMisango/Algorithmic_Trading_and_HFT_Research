@@ -206,23 +206,9 @@ class MarketDataCollector:
         # Convert timestamp to datetime
         df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-        # Check for duplicates and make index unique if needed
-        if df['timestamp'].duplicated().any():
-            print(f"Found {df['timestamp'].duplicated().sum()} duplicate timestamps. Making index unique...")
-            # Sort first to ensure proper order
-            df = df.sort_values('timestamp')
-            # Add a small increment to duplicated timestamps to make them unique
-            # This creates a new column with adjusted timestamps
-            mask = df['timestamp'].duplicated(keep='first')
-            dup_count = mask.sum()
-            increments = pd.Series(np.arange(1, dup_count + 1)) * pd.Timedelta(microseconds=1)
-            df.loc[mask, 'adjusted_timestamp'] = df.loc[mask, 'timestamp'] + pd.Series(increments).values
-            df.loc[~mask, 'adjusted_timestamp'] = df.loc[~mask, 'timestamp']
-            # Use the adjusted timestamp as index
-            df = df.set_index('adjusted_timestamp').sort_index()
-        else:
-            # No duplicates, proceed normally
-            df = df.set_index('timestamp').sort_index()
+        # Keep duplicate timestamps as they are
+        # Sort by timestamp to maintain order
+        df = df.sort_values('timestamp')
 
         # Forward fill order book data and backward fill trade data
         df['bid_price'] = df['bid_price'].ffill()
@@ -231,7 +217,7 @@ class MarketDataCollector:
         df['volume'] = df['volume'].bfill()
 
         # Resample to regular intervals (e.g., 100ms)
-        df = df.resample('100ms').agg({
+        df = df.resample('100ms', on='timestamp').agg({
             'bid_price': 'first',
             'ask_price': 'first',
             'trade_price': 'last',

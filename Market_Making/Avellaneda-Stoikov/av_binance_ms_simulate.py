@@ -1247,8 +1247,8 @@ async def main():
         'k': 1.5,                    # Order book liquidity parameter
         'c': 1.0,                    # Base intensity of order arrivals
         'T': 1.0,                    # Time horizon (days)
-        'initial_cash': 100000000.0,
-        'initial_inventory': 1000,
+        'initial_cash': 1000000,
+        'initial_inventory': 50,
         'max_inventory': 100,        # Max BTC inventory
         'order_size': 0.01,          # 0.01 BTC per order
         'update_interval': 5.0,      # Update every 5 seconds
@@ -1257,7 +1257,7 @@ async def main():
         'dashboard_port': 8050,
         'data_source': 'csv',    # 'yfinance', 'binance', or 'csv'
         'data_duration_minutes': 1,  # For Binance real-time data collection
-        'csv_path': '/home/misango/code/Algorithmic_Trading_and_HFT_Research/Market_Making/Avellaneda-Stoikov/Data_Folder_Test/hft_resampled_two_hours_data.csv'  # For CSV data source
+        'csv_path': '/home/misango/code/Algorithmic_Trading_and_HFT_Research/Market_Making/Avellaneda-Stoikov/Data_Folder_Test/btcusdt_FINAL_2h_20250411_202455.csv'  # For CSV data source
     }
     
     if config['mode'] == 'live':
