@@ -1,238 +1,228 @@
 import json
 import time
-#import datetime
 import pandas as pd
-import numpy as np
 import websocket
 import threading
-from tqdm import tqdm
-from datetime import datetime as dt
-from datetime import timedelta
+from datetime import datetime as dt, timedelta
 import os
+import traceback
 
 class MarketDataCollector:
     def __init__(self, data_path='crypto_data'):
-        """Initialize with local data directory"""
         self.combined_data = []
         self.data_path = data_path
-
-        # Create directory if it doesn't exist
+        self.running = True  
+        
         if not os.path.exists(data_path):
             os.makedirs(data_path)
             print(f"Created directory: {data_path}")
         else:
             print(f"Using existing directory: {data_path}")
-            
+
     def save_data(self, df, filename):
-        """
-        Save DataFrame to local directory
+        """!IMPROVEMENT: Added error handling for file operations"""
+        try:
+            full_path = os.path.join(self.data_path, filename)
+            print(f"Saving data to {full_path}...")
+            df.to_csv(full_path, index=False)  #
+            print(f"Successfully saved {len(df)} records")
+        except Exception as e:
+            print(f"Save failed: {str(e)[:200]}")
 
-        Args:
-            df: DataFrame to save
-            filename: Name of the file to save
-        """
-        full_path = os.path.join(self.data_path, filename)
-        print(f"Saving data to {full_path}...")
+   
+    def _ws_handler(self, message, data_type):
+        try:
+            data = json.loads(message)
+            timestamp = dt.fromtimestamp(data['E']/1000).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            
+            # Add safety checks for order book data
+            bid_price = None
+            ask_price = None
+            if data_type == 'depth':
+                if len(data.get('b', [])) > 0:
+                    bid_price = float(data['b'][0][0])
+                if len(data.get('a', [])) > 0:
+                    ask_price = float(data['a'][0][0])
 
-        # Make sure the directory exists
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            record = {
+                'timestamp': timestamp,
+                'bid_price': bid_price,
+                'ask_price': ask_price,
+                'trade_price': float(data['p']) if data_type == 'trade' else None,
+                'volume': float(data['q'])*float(data['p']) if data_type == 'trade' else None
+            }
+            self.combined_data.append(record)
+        except Exception as e:
+            print(f"Processing error: {str(e)[:200]}")
 
-        # Save the DataFrame to CSV
-        df.to_csv(full_path)
-        print(f"Successfully saved {len(df)} records to {filename}")
 
     def on_order_book_message(self, ws, message):
-        """Process order book WebSocket messages"""
-        try:
-            data = json.loads(message)
-            timestamp = dt.fromtimestamp(data['E']/1000).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
-            if data.get('b') and data.get('a'):
-                self.combined_data.append({
-                    'timestamp': timestamp,
-                    'bid_price': float(data['b'][0][0]),
-                    'ask_price': float(data['a'][0][0]),
-                    'trade_price': None,
-                    'volume': None
-                })
-        except Exception as e:
-            print(f"Error processing order book: {e}")
+        self._ws_handler(message, 'depth')
 
     def on_trade_message(self, ws, message):
-        """Process trade WebSocket messages"""
-        try:
-            data = json.loads(message)
-            timestamp = dt.fromtimestamp(data['E']/1000).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        self._ws_handler(message, 'trade')
 
-            self.combined_data.append({
-                'timestamp': timestamp,
-                'bid_price': None,
-                'ask_price': None,
-                'trade_price': float(data['p']),
-                'volume': float(data['q']) * float(data['p'])
-            })
-        except Exception as e:
-            print(f"Error processing trade: {e}")
+   
+    def _run_websocket(self, url, handler, stream_type):
+        end_time = time.time() + (3600 * 24)  # Fail-safe timeout
+        while time.time() < end_time and self.running:
+            try:
+                ws = websocket.WebSocketApp(
+                    url,
+                    on_message=handler,
+                    on_error=lambda ws, e: print(f"{stream_type} error: {str(e)[:200]}"),
+                    on_close=lambda ws: print(f"{stream_type} closed"),
+                    on_open=lambda ws: print(f"{stream_type} connected")
+                )
+                ws.run_forever(ping_interval=30, ping_timeout=10)
+            except Exception as e:
+                print(f"{stream_type} failure: {str(e)[:200]}")
+            time.sleep(5) 
 
-    def collect_long_duration_data(self, symbol, duration_hours=10, checkpoint_minutes=5):
-        """
-        Collect data for many hours with periodic checkpoints to prevent data loss
-
-        Args:
-            symbol: Trading pair symbol (e.g., 'btcusdt')
-            duration_hours: How long to collect data (in hours)
-            checkpoint_minutes: How often to save checkpoints (in minutes)
-        """
+    def collect_long_duration_data(self, symbol, duration_hours=0.1, checkpoint_minutes=1):
+       
         total_seconds = duration_hours * 3600
         checkpoint_seconds = checkpoint_minutes * 60
         start_time = time.time()
+        end_time = start_time + total_seconds  
         last_checkpoint = start_time
+        checkpoint_count = 0
+        
+        print(f"\n{'='*40}\nStarting {duration_hours}-hour collection for {symbol}")
+        print(f"Checkpoints every {checkpoint_minutes} mins | Target end: {dt.fromtimestamp(end_time)}\n{'='*40}")
 
-        print(f"Starting {duration_hours}-hour data collection for {symbol}...")
-        print(f"Will save checkpoints every {checkpoint_minutes} minutes")
-        print(f"Expected completion: {dt.now() + timedelta(hours=duration_hours)}")
-
-        def on_error(ws, error):
-            print(f"WebSocket error: {error}")
-
-        def on_close(ws, close_status_code, close_msg):
-            print(f"WebSocket closed: {close_status_code} - {close_msg}")
-
-        def on_open(ws):
-            print(f"WebSocket connection established")
-
-        # Define WebSocket functions with proper references to self
-        def run_order_book_stream():
-            while time.time() - start_time < total_seconds:
-                try:
-                    ws = websocket.WebSocketApp(
-                        f"wss://stream.binance.com:9443/ws/{symbol.lower()}@depth@100ms",
-                        on_message=self.on_order_book_message,
-                        on_error=on_error,
-                        on_close=on_close,
-                        on_open=on_open
-                    )
-                    ws.run_forever(ping_interval=30, ping_timeout=10)
-                    print("Order book WebSocket disconnected. Reconnecting...")
-                    time.sleep(3)  # Wait before reconnecting
-                except Exception as e:
-                    print(f"Order book WebSocket error: {e}")
-                    time.sleep(3)  # Wait before reconnecting
-
-        def run_trade_stream():
-            while time.time() - start_time < total_seconds:
-                try:
-                    ws = websocket.WebSocketApp(
-                        f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade",
-                        on_message=self.on_trade_message,
-                        on_error=on_error,
-                        on_close=on_close,
-                        on_open=on_open
-                    )
-                    ws.run_forever(ping_interval=30, ping_timeout=10)
-                    print("Trade WebSocket disconnected. Reconnecting...")
-                    time.sleep(3)  # Wait before reconnecting
-                except Exception as e:
-                    print(f"Trade WebSocket error: {e}")
-                    time.sleep(3)  # Wait before reconnecting
-
+        
         threads = [
-            threading.Thread(target=run_order_book_stream),
-            threading.Thread(target=run_trade_stream)
+            threading.Thread(target=self._run_websocket,
+                args=(f"wss://stream.binance.com:9443/ws/{symbol}@depth@100ms", 
+                    self.on_order_book_message, "OrderBook")),
+            threading.Thread(target=self._run_websocket,
+                args=(f"wss://stream.binance.com:9443/ws/{symbol}@trade", 
+                    self.on_trade_message, "Trades"))
         ]
 
         for t in threads:
             t.daemon = True
             t.start()
 
-        # Show progress with tqdm
-        pbar = tqdm(total=total_seconds)
-        checkpoint_count = 0
+        alive_threads = sum(1 for t in threads if t.is_alive())
+        print(f"Active connections: {alive_threads}/2 | Buffer size: {len(self.combined_data)}")
 
         try:
-            while time.time() - start_time < total_seconds:
-                elapsed = time.time() - last_checkpoint
-                if elapsed >= checkpoint_seconds and len(self.combined_data) > 0:
-                    # Process and save a checkpoint
+            while time.time() < end_time and self.running:
+                # !IMPROVEMENT: Adaptive sleep management
+                remaining = end_time - time.time()
+                sleep_time = max(0, min(1, remaining))
+                time.sleep(sleep_time)
+
+                # Checkpoint handling
+                if time.time() - last_checkpoint >= checkpoint_seconds:
                     checkpoint_count += 1
-                    print(f"\nCreating checkpoint {checkpoint_count}...")
-                    df = self.process_data()
-                    timestamp = dt.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"{symbol}_checkpoint_{checkpoint_count}_{timestamp}.csv"
-                    self.save_data(df, filename)
                     last_checkpoint = time.time()
+                    self._process_checkpoint(symbol, checkpoint_count)
 
-                    # Keep the most recent data to preserve state but free memory
-                    if len(self.combined_data) > 100000:
-                        print(f"Trimming data array from {len(self.combined_data)} to 10000 records")
-                        self.combined_data = self.combined_data[-10000:]
-
-                # Update progress bar
-                time_passed = int(time.time() - start_time)
-                pbar.update(1)
-                time.sleep(1)
-
-                # Print data collection status every minute
-                if time_passed % 60 == 0 and time_passed > 0:
-                    print(f"\nData collected so far: {len(self.combined_data)} records")
+                # !IMPROVEMENT: Status updates
+                if int(time.time() - start_time) % 10 == 0:
+                    elapsed = time.time() - start_time
+                    progress = min(100, (elapsed / total_seconds) * 100)
+                    print(f"Progress: {progress:.1f}% | Records: {len(self.combined_data)}")
 
         except KeyboardInterrupt:
-            print("Collection interrupted by user!")
+            print("\nUser requested shutdown...")
         finally:
-            pbar.close()
+            self.running = False
+            self._final_save(symbol, duration_hours)
+            print("\nCollection completed" if time.time() >= end_time else "\nCollection aborted")
 
-            # Process final dataset
-            if len(self.combined_data) > 0:
-                print("Processing final dataset...")
-                df = self.process_data()
+    def _process_checkpoint(self, symbol, count):
+        try:
+            print(f"\n{'='*20} Checkpoint {count} {'='*20}")
+            original_count = len(self.combined_data)
+            
+            # Process COPY of data
+            temp_data = self.combined_data.copy()
+            df = self.process_data()
+            
+            if not df.empty:
+                # Only clear original data AFTER successful processing
+                self.combined_data = self.combined_data[original_count:]  # Keep unprocessed data
+                timestamp = dt.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{symbol}_checkpoint_{count}_{timestamp}.csv"
+                self.save_data(df, filename)
+                
+            # Memory management (preserve last 10k)
+            if len(self.combined_data) > 10000:
+                self.combined_data = self.combined_data[-10000:]
+                
+        except Exception as e:
+            print(f"Checkpoint failed: {str(e)[:200]}")
+            traceback.print_exc()
 
-                # Save final dataset
-                final_timestamp = dt.now().strftime("%Y%m%d_%H%M%S")
-                final_filename = f"{symbol}_FINAL_{duration_hours}h_{final_timestamp}.csv"
-                self.save_data(df, final_filename)
-
-                return df
-            else:
-                print("No data collected!")
-                return None
 
     def process_data(self):
-        """Process and clean the collected data"""
-        print(f"Processing {len(self.combined_data)} data points...")
+        try:
+            if not self.combined_data:
+                return pd.DataFrame()
 
-        # Create DataFrame from collected data
-        df = pd.DataFrame(self.combined_data)
+            batch = pd.DataFrame(self.combined_data.copy())
+            batch['timestamp'] = pd.to_datetime(batch['timestamp'])
+            batch = batch.drop_duplicates(subset=['timestamp'], keep='last')
 
-        # Convert timestamp to datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+            # ==== New Validation Checks ====
+            required_columns = {'bid_price', 'ask_price', 'trade_price', 'volume'}
+            if not required_columns.issubset(batch.columns):
+                missing = required_columns - set(batch.columns)
+                print(f"Missing columns: {missing}")
+                return pd.DataFrame()
+            
+            if not batch.empty:
+                time_span = batch['timestamp'].max() - batch['timestamp'].min()
+                if time_span < pd.Timedelta('1s'):
+                    print(f"Critical time range error: {time_span}")
+                    return pd.DataFrame()
+            # ==============================
 
-        # Keep duplicate timestamps as they are
-        # Sort by timestamp to maintain order
-        df = df.sort_values('timestamp')
+            if not batch.empty:
+                resampled = (
+                    batch.set_index('timestamp')
+                    .resample('1000ms', origin='start')
+                    .agg({
+                        'bid_price': 'ffill',
+                        'ask_price': 'ffill',
+                        'trade_price': 'bfill',
+                        'volume': 'sum'
+                    })
+                    .reset_index()
+                )
+                resampled['mid_price'] = (resampled['bid_price'] + resampled['ask_price']) / 2
+                resampled = resampled.ffill().dropna(subset=['bid_price', 'ask_price'], how='all')
+                
+                print(f"Processed {len(batch)} records -> {len(resampled)} data points")
+                return resampled
+            return pd.DataFrame()
+        except Exception as e:
+            print(f"Processing error: {str(e)[:200]}")
+            traceback.print_exc()
+            return pd.DataFrame()
 
-        # Forward fill order book data and backward fill trade data
-        df['bid_price'] = df['bid_price'].ffill()
-        df['ask_price'] = df['ask_price'].ffill()
-        df['trade_price'] = df['trade_price'].bfill()
-        df['volume'] = df['volume'].bfill()
 
-        # Resample to regular intervals (e.g., 100ms)
-        df = df.resample('100ms', on='timestamp').agg({
-            'bid_price': 'first',
-            'ask_price': 'first',
-            'trade_price': 'last',
-            'volume': 'sum'
-        })
-        # Use explicit ffill() instead of fillna(method='ffill')
-        df = df.ffill()
 
-        # Calculate mid price
-        df['mid_price'] = (df['bid_price'] + df['ask_price']) / 2
+    def _final_save(self, symbol, duration):
+      
+        try:
+            print("\nFinalizing collection...")
+            df = self.process_data()
+            if not df.empty:
+                timestamp = dt.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{symbol}_FINAL_{duration}h_{timestamp}.csv"
+                self.save_data(df, filename)
+        except Exception as e:
+            print(f"Final save failed: {str(e)[:200]}")
 
-        print(f"Processed to {len(df)} data points")
-        return df
-
-# Example usage
 if __name__ == "__main__":
-    collector = MarketDataCollector(data_path="crypto_data")
-    collector.collect_long_duration_data("btcusdt", duration_hours=2, checkpoint_minutes=5)
+    collector = MarketDataCollector()
+    try:
+        collector.collect_long_duration_data("btcusdt", duration_hours=0.1, checkpoint_minutes=1)
+    except Exception as e:
+        print(f"Fatal error: {str(e)[:200]}")
+        traceback.print_exc()

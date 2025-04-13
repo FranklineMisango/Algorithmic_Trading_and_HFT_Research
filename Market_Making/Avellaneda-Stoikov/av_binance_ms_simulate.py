@@ -1248,7 +1248,7 @@ async def main():
         'c': 1.0,                    # Base intensity of order arrivals
         'T': 1.0,                    # Time horizon (days)
         'initial_cash': 1000000,
-        'initial_inventory': 50,
+        'initial_inventory': 10,
         'max_inventory': 100,        # Max BTC inventory
         'order_size': 0.01,          # 0.01 BTC per order
         'update_interval': 5.0,      # Update every 5 seconds
