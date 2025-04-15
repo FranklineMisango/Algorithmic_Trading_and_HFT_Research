@@ -185,7 +185,7 @@ class MarketDataCollector:
             if not batch.empty:
                 resampled = (
                     batch.set_index('timestamp')
-                    .resample('1000ms', origin='start')
+                    .resample('100ms', origin='start')
                     .agg({
                         'bid_price': 'ffill',
                         'ask_price': 'ffill',
@@ -222,7 +222,7 @@ class MarketDataCollector:
 if __name__ == "__main__":
     collector = MarketDataCollector()
     try:
-        collector.collect_long_duration_data("btcusdt", duration_hours=0.1, checkpoint_minutes=1)
+        collector.collect_long_duration_data("btcusdt", duration_hours=2, checkpoint_minutes=1)
     except Exception as e:
         print(f"Fatal error: {str(e)[:200]}")
         traceback.print_exc()
