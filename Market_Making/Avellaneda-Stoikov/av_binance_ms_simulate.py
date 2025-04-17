@@ -1257,7 +1257,7 @@ async def main():
         'dashboard_port': 8050,
         'data_source': 'csv',    # 'yfinance', 'binance', or 'csv'
         'data_duration_minutes': 1,  # For Binance real-time data collection
-        'csv_path': '/home/misango/code/Algorithmic_Trading_and_HFT_Research/Market_Making/Avellaneda-Stoikov/Data_Folder_Test/HFT_100ms_unresampled_data_combined_data.csv'  # For CSV data source
+        'csv_path': '/home/misango/code/Algorithmic_Trading_and_HFT_Research/HFT_Binance_data_fetcher/HFT_1_hr_combined_crypto_data_1s.csv'  # For CSV data source
     }
     
     if config['mode'] == 'live':

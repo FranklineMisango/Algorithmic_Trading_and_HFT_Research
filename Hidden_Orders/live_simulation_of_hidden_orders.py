@@ -6,7 +6,7 @@ import threading
 from datetime import datetime as dt, timedelta
 import os
 import traceback
-from collections import deque
+from collections import deque, defaultdict
 from tabulate import tabulate
 import curses
 import numpy as np
@@ -21,6 +21,11 @@ class HiddenOrderSimulator:
         self.last_update = time.time()
         self.display_lock = threading.Lock()
         self.recent_trades = deque(maxlen=20)  # Track recent trades for pattern detection
+        
+        # New: Track repetitive anomalies
+        self.anomaly_patterns = defaultdict(list)  # Pattern -> list of anomalies
+        self.pattern_stats = defaultdict(lambda: {"count": 0, "total_volume": 0.0, "last_seen": None})
+        self.time_window = 300  # Time window in seconds to consider repetitions (5 minutes)
         
         # Statistics
         self.stats = {
@@ -101,17 +106,20 @@ class HiddenOrderSimulator:
             
         reason = None
         is_hidden = False
+        pattern_key = None
         
         # Check if trade is outside visible orders
         if trade_price < bid_price:
             reason = f"Trade price {trade_price} below best bid {bid_price}"
             is_hidden = True
             self.stats['below_bid_count'] += 1
+            pattern_key = f"below_bid_{int(trade_price*100)//int(bid_price*100)}"
             
         elif trade_price > ask_price:
             reason = f"Trade price {trade_price} above best ask {ask_price}"
             is_hidden = True
             self.stats['above_ask_count'] += 1
+            pattern_key = f"above_ask_{int(trade_price*100)//int(ask_price*100)}"
             
         # Check for unusual volume patterns
         elif len(self.recent_trades) > 5:
@@ -120,15 +128,23 @@ class HiddenOrderSimulator:
                 reason = f"Volume spike: {trade_volume:.2f} vs avg {avg_volume:.2f}"
                 is_hidden = True
                 self.stats['volume_anomaly_count'] += 1
+                pattern_key = f"volume_spike_{int(trade_volume//avg_volume)}"
                 
         # Check for trades exactly at mid price (could be dark pool)
         elif abs(trade_price - ((bid_price + ask_price) / 2)) < 0.00001:
             reason = f"Trade at exact mid-price: {trade_price}"
             is_hidden = True
             self.stats['between_spreads_count'] += 1
+            pattern_key = "midprice_exact"
         
         if is_hidden:
-            # Add to hidden orders list
+            # Calculate repetition and add pattern
+            repetition_count = 1
+            if pattern_key:
+                self._track_pattern(pattern_key, timestamp, trade_volume, trade_price, trade_size)
+                repetition_count = self.pattern_stats[pattern_key]["count"]
+            
+            # Add to hidden orders list with repetition info
             self.hidden_orders.append({
                 'timestamp': timestamp,
                 'trade_price': trade_price,
@@ -136,11 +152,41 @@ class HiddenOrderSimulator:
                 'volume': trade_volume,
                 'bid': bid_price,
                 'ask': ask_price,
-                'reason': reason
+                'reason': reason,
+                'pattern': pattern_key,
+                'repetitions': repetition_count,
+                'total_liquidity': self.pattern_stats[pattern_key]["total_volume"] if pattern_key else trade_volume
             })
             
             self.stats['total_hidden_orders'] += 1
             self.last_update = time.time()
+
+    def _track_pattern(self, pattern_key, timestamp, volume, price, size):
+        """Track repetitive anomaly patterns and update statistics"""
+        current_time = timestamp
+        
+        # Clean up old patterns outside our time window
+        now = dt.now()
+        cutoff_time = now - timedelta(seconds=self.time_window)
+        
+        # Update pattern statistics
+        self.pattern_stats[pattern_key]["count"] += 1
+        self.pattern_stats[pattern_key]["total_volume"] += volume
+        self.pattern_stats[pattern_key]["last_seen"] = current_time
+        
+        # Store this specific instance
+        self.anomaly_patterns[pattern_key].append({
+            'timestamp': current_time,
+            'volume': volume,
+            'price': price,
+            'size': size
+        })
+        
+        # Prune old entries outside time window
+        self.anomaly_patterns[pattern_key] = [
+            entry for entry in self.anomaly_patterns[pattern_key] 
+            if entry['timestamp'] > cutoff_time
+        ]
 
     def on_order_book_message(self, ws, message):
         self._ws_handler(message, 'depth')
@@ -164,9 +210,9 @@ class HiddenOrderSimulator:
         os.system('clear')  # Clear terminal
         
         # Print header
-        print("\n" + "="*80)
-        print(f"  🕵️  HIDDEN ORDER DETECTOR - LIVE SIMULATION  🕵️")
-        print("="*80)
+        print("\n" + "="*100)
+        print(f"  🕵️  HIDDEN ORDER DETECTOR - LIVE SIMULATION WITH REPETITION TRACKING  🕵️")
+        print("="*100)
         
         # Print current market stats
         bid = self.orderbook_data.get('bid_price', 'N/A')
@@ -175,6 +221,24 @@ class HiddenOrderSimulator:
         
         print(f"\nCurrent Market: Bid: {bid} | Ask: {ask} | Spread: {spread}")
         print(f"Hidden Orders Detected: {self.stats['total_hidden_orders']} | Below Bid: {self.stats['below_bid_count']} | Above Ask: {self.stats['above_ask_count']} | Volume Anomalies: {self.stats['volume_anomaly_count']}")
+        
+        # Print repetitive pattern statistics
+        if self.pattern_stats:
+            print("\nRepetitive Anomaly Patterns (Last 5 minutes):")
+            pattern_table = []
+            for pattern, stats in sorted(self.pattern_stats.items(), key=lambda x: x[1]["count"], reverse=True):
+                if stats["last_seen"] > dt.now() - timedelta(seconds=self.time_window):
+                    pattern_table.append([
+                        pattern,
+                        stats["count"],
+                        f"{stats['total_volume']:.8f}",
+                        stats["last_seen"].strftime("%H:%M:%S") if stats["last_seen"] else "N/A"
+                    ])
+            
+            if pattern_table:
+                print(tabulate(pattern_table[:5], 
+                              headers=["Pattern", "Repetitions", "Total Liquidity", "Last Seen"],
+                              tablefmt="grid"))
         
         # Print most recent hidden orders
         if self.hidden_orders:
@@ -185,13 +249,16 @@ class HiddenOrderSimulator:
             
             table_data = []
             for order in display_orders:
+                repetition_info = f" ({order.get('repetitions', 1)}x)" if order.get('repetitions', 1) > 1 else ""
+                liquidity_info = f" Total: {order.get('total_liquidity', order['volume']):.5f}" if order.get('repetitions', 1) > 1 else ""
+                
                 table_data.append([
                     order['timestamp'].strftime("%H:%M:%S.%f")[:-3],
                     f"{order['trade_price']:.8f}",
                     f"{order['trade_size']:.5f}",
                     f"{order['bid']:.8f}",
                     f"{order['ask']:.8f}",
-                    order['reason']
+                    f"{order['reason']}{repetition_info}{liquidity_info}"
                 ])
             
             headers = ["Timestamp", "Price", "Size", "Bid", "Ask", "Reason"]
@@ -250,15 +317,6 @@ class HiddenOrderSimulator:
             print("Simulation ended")
 
 if __name__ == "__main__":
-    # Install tabulate if not available
-    try:
-        import tabulate
-    except ImportError:
-        print("Installing required packages...")
-        import subprocess
-        subprocess.check_call(["pip", "install", "tabulate"])
-        import tabulate
-    
     simulator = HiddenOrderSimulator()
     try:
         # Change to your preferred symbol
