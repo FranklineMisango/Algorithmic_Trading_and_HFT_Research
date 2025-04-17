@@ -123,3 +123,24 @@ class KyleModel:
         plt.title('Informed Trader Profitability')
         plt.legend()
         plt.show()
+
+    
+if __name__ == "__main__":
+    # Parameters for the Kyle model
+    mu = 100  # Mean fundamental value
+    sigma_v = 10  # Standard deviation of fundamental value
+    sigma_u = 5  # Standard deviation of noise trader demand
+    lambda_param = 0.1  # Price impact parameter
+
+    # Initialize the Kyle model
+    kyle_model = KyleModel(mu, sigma_v, sigma_u, lambda_param)
+
+    # Simulate trades
+    n_trades = 25
+    trades_df = kyle_model.simulate_multiple_trades(n_trades)
+
+    # Backtest the informed trader strategy
+    trades_df = kyle_model.backtest_informed_trader(trades_df)
+
+    # Visualize the simulation results
+    kyle_model.visualize_simulation(trades_df)

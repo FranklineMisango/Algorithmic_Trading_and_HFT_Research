@@ -150,3 +150,18 @@ class GlostenMilgromModelPriceSensitive:
         plt.ylabel('Frequency')
         plt.title('Trade Direction Distribution')
         plt.show()
+
+
+if __name__ == "__main__":
+    v_high = 100
+    v_low = 50
+    p = 0.6
+    alpha = 0.2
+    def c_dist(x):
+        return x  
+    gm_model = GlostenMilgromModelPriceSensitive(v_high, v_low, p, alpha, c_dist)
+    n_trades = 100000
+    trades_df = gm_model.simulate_multiple_trades(n_trades)
+    stats = gm_model.analyze_trades(trades_df)
+    print(stats)
+    gm_model.visualize_trades(trades_df)
