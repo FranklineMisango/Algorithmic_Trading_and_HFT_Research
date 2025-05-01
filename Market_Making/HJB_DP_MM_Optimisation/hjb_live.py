@@ -1127,7 +1127,7 @@ def main():
                         mid_price = (bid + ask) / 2
                         optimal_bid, optimal_ask = solver.get_optimal_quotes(mid_price, current_inventory)
                         
-                        # Simulate order executions
+                        # When orders are executed, add them to the filled_orders list
                         if random.random() < 0.05:  # 5% chance of execution
                             if random.random() < 0.5:  # Buy execution
                                 size = random.randint(1, 5)
@@ -1135,21 +1135,30 @@ def main():
                                 execution_price = optimal_ask * (1 + random.uniform(-0.001, 0.001))
                                 cumulative_pnl -= execution_price * size
                                 print(f"BUY EXECUTED: {size} @ {execution_price:.4f}")
+                                
+                                # Add to filled_orders list
+                                filled_orders.append({
+                                    'type': 'BUY',
+                                    'size': size,
+                                    'price': execution_price,
+                                    'timestamp': datetime.now(),
+                                    'symbol': symbol
+                                })
                             else:  # Sell execution
                                 size = random.randint(1, 5)
                                 current_inventory -= size
                                 execution_price = optimal_bid * (1 + random.uniform(-0.001, 0.001))
                                 cumulative_pnl += execution_price * size
                                 print(f"SELL EXECUTED: {size} @ {execution_price:.4f}")
-                        
-                        # Update dashboard
-                        dashboard.update({
-                            'bid': optimal_bid,
-                            'ask': optimal_ask,
-                            'inventory': current_inventory,
-                            'pnl': cumulative_pnl, 
-                            'symbol': symbol
-                        })
+                                
+                                # Add to filled_orders list
+                                filled_orders.append({
+                                    'type': 'SELL',
+                                    'size': size,
+                                    'price': execution_price,
+                                    'timestamp': datetime.now(),
+                                    'symbol': symbol
+                                })
             
             # Generate periodic updates even without new data
             if not data_processed and current_time - last_update_time > update_interval:
