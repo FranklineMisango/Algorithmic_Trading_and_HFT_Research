@@ -52,13 +52,16 @@ except (ImportError, RuntimeError, Exception) as e:
     print("Using CPU-based computation instead of GPU. Performance may be slower.")
 
 def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
-    """CPU implementation of HJB update"""
     if USE_GPU:
-        # Use the CUDA kernel
         @cuda.jit
         def hjb_kernel(d_V, d_V_next, d_S, d_I, dt, ds, di, params):
             i, j = cuda.grid(2)
             if 1 <= i < d_V.shape[0]-1 and 1 <= j < d_V.shape[1]-1:
+                # Check inventory boundaries - enforce constraints
+                if j == 0 or j == d_V.shape[1]-1:
+                    d_V[i,j] = -1e20  # Numerical approximation of -∞
+                    return
+                
                 # Extract current state
                 S = d_S[i]
                 I = d_I[j]
@@ -71,6 +74,28 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                 market_impact = params[4]
                 best_bid = params[5]
                 best_ask = params[6]
+                jump_intensity = params[7]
+                jump_mean = params[8]
+                jump_std = params[9]
+                
+                # Device function for jump operator
+                @cuda.jit(device=True)
+                def jump_operator(V_next, S, i, j, ds, di, params):
+                    jump_term = 0.0
+                    jump_mean = params[8]
+                    jump_std = params[9]
+                    
+                    # Discrete jump size approximation
+                    for m in range(-2, 3):
+                        jump_size = jump_mean + m*jump_std
+                        S_jump = S * (1 + jump_size)
+                        # Find nearest grid index
+                        idx = min(max(int((S_jump - d_S[0])/ds), 0), V_next.shape[0]-1)
+                        # Uniform jump probability approximation
+                        jump_term += (1/5) * V_next[idx,j]
+                    
+                    # λ(J - I)V
+                    return params[7] * (jump_term - V_next[i,j])
                 
                 V_S_plus = d_V_next[i+1, j] 
                 V_S_minus = d_V_next[i-1, j]
@@ -108,8 +133,11 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                             # Diffusion term from price process
                             diffusion = 0.5 * sigma * sigma * S * S * V_SS * dt
                             
-                            # Candidate value
-                            V_candidate = d_V_next[i, j] + expected_pnl - inventory_cost + diffusion
+                            # Jump term 
+                            jump_term = jump_operator(d_V_next, S, i, j, ds, di, params) * dt
+                            
+                            # Candidate value with jump diffusion
+                            V_candidate = d_V_next[i, j] + expected_pnl - inventory_cost + diffusion + jump_term
                             
                             # Update if better
                             if V_candidate > V_optimal:
@@ -121,9 +149,14 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
         return hjb_kernel
     
     else:
-        # CPU implementation (simplified but functional)
+        #CPU implementation (simplified but functional)
         for i in range(1, V.shape[0]-1):
             for j in range(1, V.shape[1]-1):
+                # Check inventory boundaries
+                if j == 0 or j == V.shape[1]-1:
+                    V[i,j] = -1e20  # Enforce boundary conditions
+                    continue
+                
                 # Extract current state
                 S = S_grid[i]
                 I = I_grid[j]
@@ -136,6 +169,9 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                 market_impact = params[4]
                 best_bid = params[5]
                 best_ask = params[6]
+                jump_intensity = params[7] if len(params) > 7 else 0.0
+                jump_mean = params[8] if len(params) > 8 else 0.0
+                jump_std = params[9] if len(params) > 9 else 0.0
                 
                 V_S_plus = V_next[i+1, j] 
                 V_S_minus = V_next[i-1, j]
@@ -147,6 +183,16 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                 V_I = (V_I_plus - V_I_minus) / (2 * di)
                 
                 V_optimal = -1e10  # Negative infinity
+                
+                # Jump term for CPU implementation
+                jump_term = 0.0
+                if jump_intensity > 0:
+                    for m in range(-2, 3):
+                        jump_size = jump_mean + m*jump_std
+                        S_jump = S * (1 + jump_size)
+                        idx = min(max(int((S_jump - S_grid[0])/ds), 0), V_next.shape[0]-1)
+                        jump_term += (1/5) * V_next[idx,j]
+                    jump_term = jump_intensity * (jump_term - V_next[i,j]) * dt
                 
                 # Discretized control space for bid/ask adjustments (reduced search space for CPU)
                 for bid_idx in range(3):  # -ds to +ds (reduced for CPU)
@@ -173,8 +219,8 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                             # Diffusion term from price process
                             diffusion = 0.5 * sigma * sigma * S * S * V_SS * dt
                             
-                            # Candidate value
-                            V_candidate = V_next[i, j] + expected_pnl - inventory_cost + diffusion
+                            # Candidate value with jump diffusion
+                            V_candidate = V_next[i, j] + expected_pnl - inventory_cost + diffusion + jump_term
                             
                             # Update if better
                             if V_candidate > V_optimal:
@@ -186,19 +232,59 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
         return V
 
 
-class HJBSolver:
-    """Hamilton-Jacobi-Bellman equation solver for market making"""
-    
+class ToxicityTracker:
+    def __init__(self, window=100):
+        """
+        Order book toxicity tracker
+        
+        Args:
+            window: Number of trades to consider for toxicity calculation
+        """
+        self.trade_imbalance = deque(maxlen=window)
+        self.spread_history = deque(maxlen=window)
+        
+    def update_toxicity(self, bid, ask, last_trade):
+        """Update toxicity metrics with latest market data"""
+        mid = (bid + ask)/2
+        direction = 1 if last_trade > mid else -1
+        self.trade_imbalance.append(direction)
+        self.spread_history.append(ask - bid)
+        
+    @property
+    def toxicity(self):
+        """
+        Calculate order book toxicity score
+        
+        Returns:
+            float: Toxicity score from -1.0 to 1.0
+        """
+        if len(self.trade_imbalance) < 10:
+            return 0.0
+        imbalance = np.mean(self.trade_imbalance)
+        spread = np.mean(self.spread_history)
+        # Toxicity increases with order imbalance and decreases with spread
+        return np.clip(imbalance * (1/spread), -1.0, 1.0)
+
+
+class HJBSolver:    
     def __init__(self, S_min, S_max, I_min, I_max, N_S=101, N_I=101, 
-                 sigma=0.2, kappa=0.001, gamma=0.0001, rho=0.01, market_impact=0.0001):
+                 sigma=0.2, kappa=0.001, gamma=0.0001, rho=0.01, market_impact=0.0001,
+                 jump_intensity=0.1, jump_mean=0.0, jump_std=0.01):
         # Grid parameters
         self.S_grid = np.linspace(S_min, S_max, N_S)
         self.I_grid = np.linspace(I_min, I_max, N_I)
         self.ds = (S_max - S_min) / (N_S - 1)
         self.di = (I_max - I_min) / (N_I - 1)
         
-        # Model parameters
-        self.params = np.array([sigma, kappa, gamma, rho, market_impact, 0.0, 0.0], dtype=np.float32)
+        # Initialize toxicity tracker
+        self.toxicity_tracker = ToxicityTracker(window=100)
+        
+        # Model parameters (extended with jump diffusion parameters)
+        self.params = np.array([
+            sigma, kappa, gamma, rho, market_impact, 
+            0.0, 0.0,  # bid/ask placeholders
+            jump_intensity, jump_mean, jump_std
+        ], dtype=np.float32)
         
         # Initialize value function
         self.V = np.zeros((N_S, N_I))
@@ -221,12 +307,19 @@ class HJBSolver:
             # Get the kernel function
             self.hjb_kernel = hjb_update(self.V, self.V_next, self.S_grid, self.I_grid, 0.001, self.ds, self.di, self.params)
         
-    def update(self, bid_price, ask_price, dt=0.001):
+    def update(self, bid_price, ask_price, last_trade=None, dt=0.001):
         """Update value function for one time step"""
         # Add small random noise to ensure changes are visible
         noise = np.random.normal(0, 0.0001)
         self.params[5] = bid_price * (1 + noise)
         self.params[6] = ask_price * (1 + noise)
+        
+        # Update toxicity if we have trade data
+        if last_trade is not None:
+            self.toxicity_tracker.update_toxicity(bid_price, ask_price, last_trade)
+            # Adjust market impact based on toxicity
+            toxicity = self.toxicity_tracker.toxicity
+            self.params[4] = self.params[4] * (1 + 2*toxicity)  # Impact scaling
         
         if USE_GPU:
             # GPU implementation
@@ -294,7 +387,222 @@ class HJBSolver:
             
         return optimal_bid, optimal_ask
 
+def hjb_shared_memory_kernel(V, V_next, S_grid, I_grid, dt, ds, di, params):
+    """GPU implementation with shared memory tiling"""
+    @cuda.jit
+    def hjb_kernel_sm(d_V, d_V_next, d_S, d_I, dt, ds, di, params):
+        # Shared memory allocation for the tile
+        tile_dim_x = 32
+        tile_dim_y = 32
+        shared_V = cuda.shared.array(shape=(34, 34), dtype=np.float32)  # 32x32 tile + halo
+        
+        # Global position
+        i, j = cuda.grid(2)
+        
+        # Local thread index
+        tx = cuda.threadIdx.x
+        ty = cuda.threadIdx.y
+        
+        # Local position in shared memory (add 1 for halo)
+        li = tx + 1
+        lj = ty + 1
+        
+        # Load main tile data into shared memory
+        if i < d_V.shape[0] and j < d_V.shape[1]:
+            shared_V[li, lj] = d_V_next[i, j]
+        else:
+            shared_V[li, lj] = 0.0
+        
+        # Load halo regions
+        if tx < 1 and i > 0:  # Left halo
+            shared_V[li-1, lj] = d_V_next[i-1, j]
+        if tx >= tile_dim_x-1 and i < d_V.shape[0]-1:  # Right halo
+            shared_V[li+1, lj] = d_V_next[i+1, j]
+        if ty < 1 and j > 0:  # Top halo
+            shared_V[li, lj-1] = d_V_next[i, j-1]
+        if ty >= tile_dim_y-1 and j < d_V.shape[1]-1:  # Bottom halo
+            shared_V[li, lj+1] = d_V_next[i, j+1]
+        
+        # Ensure all threads finish loading shared memory
+        cuda.syncthreads()
+        
+        # Only compute for valid grid points
+        if 1 <= i < d_V.shape[0]-1 and 1 <= j < d_V.shape[1]-1:
+            # Check inventory boundaries - enforce constraints
+            if j == 0 or j == d_V.shape[1]-1:
+                d_V[i,j] = -1e20  # Numerical approximation of -∞
+                return
+            
+            # Extract current state
+            S = d_S[i]
+            I = d_I[j]
+            
+            # Extract params
+            sigma = params[0]
+            kappa = params[1]
+            gamma = params[2]
+            rho = params[3]
+            market_impact = params[4]
+            best_bid = params[5]
+            best_ask = params[6]
+            jump_intensity = params[7]
+            jump_mean = params[8]
+            jump_std = params[9]
+            
+            # Use shared memory for derivatives
+            V_S_plus = shared_V[li+1, lj] 
+            V_S_minus = shared_V[li-1, lj]
+            V_I_plus = shared_V[li, lj+1]
+            V_I_minus = shared_V[li, lj-1]
+            
+            V_S = (V_S_plus - V_S_minus) / (2 * ds)
+            V_SS = (V_S_plus - 2 * shared_V[li, lj] + V_S_minus) / (ds**2)
+            V_I = (V_I_plus - V_I_minus) / (2 * di)
+            
+            V_optimal = -1e10  # Negative infinity
+            
+            # Compute jump term from global memory (can't fit jumps in shared)
+            jump_term = 0.0
+            if jump_intensity > 0:
+                for m in range(-2, 3):
+                    jump_size = jump_mean + m*jump_std
+                    S_jump = S * (1 + jump_size)
+                    idx = min(max(int((S_jump - d_S[0])/ds), 0), d_V_next.shape[0]-1)
+                    jump_term += (1/5) * d_V_next[idx,j]
+                jump_term = jump_intensity * (jump_term - d_V_next[i,j]) * dt
+            
+            # Discretized control space for bid/ask adjustments
+            for bid_idx in range(5):  # -2*ds to +2*ds
+                bid_change = (bid_idx - 2) * ds
+                
+                for ask_idx in range(5):  # -2*ds to +2*ds
+                    ask_change = (ask_idx - 2) * ds
+                    
+                    new_bid = best_bid + bid_change
+                    new_ask = best_ask + ask_change
+                    
+                    if new_bid > 0 and new_ask > 0 and new_bid < new_ask:
+                        # Order execution intensity model (simplified)
+                        buy_intensity = max(0.0, dt * (1.0 - (new_bid / best_bid - 1.0) / market_impact))
+                        sell_intensity = max(0.0, dt * (1.0 - (new_ask / best_ask - 1.0) / market_impact))
+                        
+                        # Expected P&L from trades
+                        expected_pnl = new_bid * sell_intensity - new_ask * buy_intensity
+                        
+                        # Inventory risk penalty
+                        inventory_cost = kappa * I * I * dt
+                        
+                        # Diffusion term from price process
+                        diffusion = 0.5 * sigma * sigma * S * S * V_SS * dt
+                        
+                        # Candidate value with jump diffusion
+                        V_candidate = shared_V[li, lj] + expected_pnl - inventory_cost + diffusion + jump_term
+                        
+                        # Update if better
+                        if V_candidate > V_optimal:
+                            V_optimal = V_candidate
+            
+            # Update value function
+            d_V[i, j] = V_optimal
+    
+    return hjb_kernel_sm
 
+def validate_jump_model(S_min=90, S_max=110, N_S=101, N_I=21, iterations=1000):
+    """
+    Test Merton jump diffusion convergence
+    
+    Returns:
+        tuple: (S_grid, option_values)
+    """
+    import matplotlib.pyplot as plt
+    
+    S_grid = np.linspace(S_min, S_max, N_S)
+    I_grid = np.linspace(-10, 10, N_I)
+    ds = (S_max - S_min) / (N_S - 1)
+    di = 20 / (N_I - 1)
+    
+    # Initial condition: call option payoff at maturity
+    K = 100  # Strike price
+    V = np.zeros((N_S, N_I))
+    for i in range(N_S):
+        for j in range(N_I):
+            V[i, j] = max(S_grid[i] - K, 0)
+    
+    V_next = V.copy()
+    
+    # Set up parameters
+    dt = 0.001
+    sigma = 0.2
+    kappa = 0.001
+    gamma = 0.0001
+    rho = 0.01
+    market_impact = 0.0001
+    best_bid = 100
+    best_ask = 101
+    # Jump parameters
+    jump_intensity = 0.5  
+    jump_mean = 0.0
+    jump_std = 0.02
+    
+    params = np.array([
+        sigma, kappa, gamma, rho, market_impact, 
+        best_bid, best_ask, jump_intensity, jump_mean, jump_std
+    ], dtype=np.float32)
+    
+    # Run iterations
+    print("Running jump diffusion validation...")
+    for i in range(iterations):
+        if i % 100 == 0:
+            print(f"Iteration {i}/{iterations}")
+        V = hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params)
+        V, V_next = V_next.copy(), V.copy()
+    
+    # Extract mid-index for I dimension to get option value function
+    option_values = V[:, N_I // 2]
+    
+    # Plot the results
+    plt.figure(figsize=(10, 6))
+    plt.plot(S_grid, option_values)
+    plt.title('Option Values with Jump Diffusion')
+    plt.xlabel('Stock Price')
+    plt.ylabel('Option Value')
+    plt.grid(True)
+    plt.savefig('jump_diffusion_validation.png')
+    
+    print("Jump diffusion validation complete. See jump_diffusion_validation.png")
+    return S_grid, option_values
+
+
+def profile_performance(solver, bid_price, ask_price, iterations=1000):
+    """
+    Profile the performance of the HJB solver
+    
+    Args:
+        solver: HJBSolver instance
+        bid_price: Current bid price
+        ask_price: Current ask price
+        iterations: Number of iterations to run
+    """
+    try:
+        from nvidia import nsight
+        with nsight.Profile() as prof:
+            start_time = time.time()
+            for _ in range(iterations):
+                solver.update(bid_price, ask_price)
+            end_time = time.time()
+            
+        print(f"Performance profiling: {iterations} iterations in {end_time - start_time:.4f} seconds")
+        print(f"Average time per iteration: {(end_time - start_time) / iterations * 1000:.4f} ms")
+        print(prof.report())
+    except ImportError:
+        # Fallback if nsight is not available
+        start_time = time.time()
+        for _ in range(iterations):
+            solver.update(bid_price, ask_price)
+        end_time = time.time()
+        
+        print(f"Performance profiling: {iterations} iterations in {end_time - start_time:.4f} seconds")
+        print(f"Average time per iteration: {(end_time - start_time) / iterations * 1000:.4f} ms")
 class DataEngine:
     def __init__(self, symbol):
         self.symbol = symbol.lower()
@@ -674,7 +982,9 @@ class CryptoHeatScanner:
         """Get current rankings of hot cryptocurrencies"""
         return self.rankings
 
+
 def main():
+
     print("Initializing HJB Market Making Strategy...")
     
     # Initialize hot crypto scanner
@@ -730,11 +1040,16 @@ def main():
     I_min = -100  # Max short position
     I_max = 100   # Max long position
     
-    # Create solver with smaller grid for CPU performance if not using GPU
     grid_size = 51 if not USE_GPU else 101
-    solver = HJBSolver(S_min, S_max, I_min, I_max, N_S=grid_size, N_I=grid_size)
     
-    # Trading state
+    # Initialize solver with jump diffusion parameters
+    solver = HJBSolver(
+        S_min, S_max, I_min, I_max, 
+        N_S=grid_size, N_I=grid_size,
+        jump_intensity=0.1,  # Jump occurs with 10% probability per unit time
+        jump_mean=0.0,       # Zero mean jump (symmetric)
+        jump_std=0.01        # 1% standard deviation for jumps
+    )
     current_inventory = 0
     cumulative_pnl = 0
     filled_orders = []
@@ -752,7 +1067,7 @@ def main():
         try:
             current_time = time.time()
             update_count += 1
-            
+                    
             # Check periodically if a different cryptocurrency is now hotter
             if current_time - last_symbol_check > symbol_check_interval:
                 new_hot_symbol = scanner.get_top_symbol()
