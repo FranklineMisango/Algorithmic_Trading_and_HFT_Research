@@ -21,6 +21,7 @@ import os
 from numba import config
 config.CUDA_ENABLE_PYNVJITLINK = 1
 config.CUDA_LOW_OCCUPANCY_WARNINGS = 0
+os.environ['NUMBA_CUDA_DRIVER'] = '/usr/lib/x86_64-linux-gnu/libcuda.so'
 
 USE_GPU = True
 try:
@@ -51,8 +52,24 @@ except (ImportError, RuntimeError, Exception) as e:
     warnings.warn(f"CUDA initialization failed: {str(e)}. Falling back to CPU implementation.")
     print("Using CPU-based computation instead of GPU. Performance may be slower.")
 
+@cuda.jit(device=True)
+def jump_operator_device(V_next, S, i, j, ds, di, params, d_S):
+    jump_term = 0.0
+    jump_mean = params[8]
+    jump_std = params[9]
+    jump_intensity = params[7]
+    for m in range(-2, 3):
+        jump_size = jump_mean + m*jump_std
+        S_jump = S * (1 + jump_size)
+        idx = min(max(int((S_jump - d_S[0])/ds), 0), V_next.shape[0]-1)
+        jump_term += (1/5) * V_next[idx,j]
+    
+    # λ(J - I)V
+    return params[7] * (jump_term - V_next[i,j])
+
 def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
     if USE_GPU:
+        
         @cuda.jit
         def hjb_kernel(d_V, d_V_next, d_S, d_I, dt, ds, di, params):
             i, j = cuda.grid(2)
@@ -74,29 +91,8 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                 market_impact = params[4]
                 best_bid = params[5]
                 best_ask = params[6]
-                jump_intensity = params[7]
-                jump_mean = params[8]
-                jump_std = params[9]
                 
-                # Device function for jump operator
-                @cuda.jit(device=True)
-                def jump_operator(V_next, S, i, j, ds, di, params):
-                    jump_term = 0.0
-                    jump_mean = params[8]
-                    jump_std = params[9]
-                    
-                    # Discrete jump size approximation
-                    for m in range(-2, 3):
-                        jump_size = jump_mean + m*jump_std
-                        S_jump = S * (1 + jump_size)
-                        # Find nearest grid index
-                        idx = min(max(int((S_jump - d_S[0])/ds), 0), V_next.shape[0]-1)
-                        # Uniform jump probability approximation
-                        jump_term += (1/5) * V_next[idx,j]
-                    
-                    # λ(J - I)V
-                    return params[7] * (jump_term - V_next[i,j])
-                
+                # Calculate derivatives first
                 V_S_plus = d_V_next[i+1, j] 
                 V_S_minus = d_V_next[i-1, j]
                 V_I_plus = d_V_next[i, j+1]
@@ -105,6 +101,12 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                 V_S = (V_S_plus - V_S_minus) / (2 * ds)
                 V_SS = (V_S_plus - 2 * d_V_next[i, j] + V_S_minus) / (ds**2)
                 V_I = (V_I_plus - V_I_minus) / (2 * di)
+                
+                # Diffusion term from price process - now V_SS is defined
+                diffusion = 0.5 * sigma * sigma * S * S * V_SS * dt
+                
+                # Jump term
+                jump_term = jump_operator_device(d_V_next, S, i, j, ds, di, params, d_S) * dt
                 
                 V_optimal = -1e10  # Negative infinity
                 
@@ -130,11 +132,8 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                             # Inventory risk penalty
                             inventory_cost = kappa * I * I * dt
                             
-                            # Diffusion term from price process
-                            diffusion = 0.5 * sigma * sigma * S * S * V_SS * dt
-                            
-                            # Jump term 
-                            jump_term = jump_operator(d_V_next, S, i, j, ds, di, params) * dt
+                            # Don't recalculate diffusion - use the value calculated earlier
+                            # diffusion is already set above
                             
                             # Candidate value with jump diffusion
                             V_candidate = d_V_next[i, j] + expected_pnl - inventory_cost + diffusion + jump_term
@@ -145,7 +144,8 @@ def hjb_update(V, V_next, S_grid, I_grid, dt, ds, di, params):
                 
                 # Update value function
                 d_V[i, j] = V_optimal
-        
+        # Launch kernel
+
         return hjb_kernel
     
     else:
