@@ -17,7 +17,14 @@ import random
 import websocket
 import warnings
 import os
-
+import psutil
+try:
+    import pynvml
+    HAS_GPU_MONITORING = True
+except ImportError:
+    HAS_GPU_MONITORING = False
+    print("GPU monitoring not available. Install pynvml for GPU metrics.")
+import plotly.express as px
 from numba import config
 config.CUDA_ENABLE_PYNVJITLINK = 1
 config.CUDA_LOW_OCCUPANCY_WARNINGS = 0
@@ -265,7 +272,62 @@ class ToxicityTracker:
         # Toxicity increases with order imbalance and decreases with spread
         return np.clip(imbalance * (1/spread), -1.0, 1.0)
 
-
+class ResourceMonitor:
+    """Monitor system resources like CPU and GPU usage"""
+    def __init__(self, history_length=100):
+        self.history_length = history_length
+        self.timestamps = deque(maxlen=history_length)
+        self.cpu_usage = deque(maxlen=history_length)
+        self.memory_usage = deque(maxlen=history_length)
+        
+        # GPU monitoring
+        self.has_gpu = HAS_GPU_MONITORING and USE_GPU
+        self.gpu_usage = deque(maxlen=history_length) if self.has_gpu else None
+        self.gpu_memory = deque(maxlen=history_length) if self.has_gpu else None
+        
+        if self.has_gpu:
+            try:
+                pynvml.nvmlInit()
+                self.device_count = pynvml.nvmlDeviceGetCount()
+                if self.device_count > 0:
+                    self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # First GPU
+                else:
+                    self.has_gpu = False
+            except Exception as e:
+                print(f"Error initializing GPU monitoring: {e}")
+                self.has_gpu = False
+    
+    def update(self):
+        """Update resource usage metrics"""
+        now = datetime.now()
+        self.timestamps.append(now)
+        
+        # CPU metrics
+        self.cpu_usage.append(psutil.cpu_percent())
+        self.memory_usage.append(psutil.virtual_memory().percent)
+        
+        # GPU metrics if available
+        if self.has_gpu:
+            try:
+                utilization = pynvml.nvmlDeviceGetUtilizationRates(self.handle)
+                self.gpu_usage.append(utilization.gpu)
+                
+                memory_info = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
+                memory_percent = (memory_info.used / memory_info.total) * 100
+                self.gpu_memory.append(memory_percent)
+            except Exception as e:
+                print(f"Error updating GPU metrics: {e}")
+                self.gpu_usage.append(0)
+                self.gpu_memory.append(0)
+    
+    def cleanup(self):
+        """Clean up GPU monitoring resources"""
+        if self.has_gpu:
+            try:
+                pynvml.nvmlShutdown()
+            except:
+                pass
+            
 class HJBSolver:    
     def __init__(self, S_min, S_max, I_min, I_max, N_S=101, N_I=101, 
                  sigma=0.2, kappa=0.001, gamma=0.0001, rho=0.01, market_impact=0.0001,
@@ -572,6 +634,26 @@ def validate_jump_model(S_min=90, S_max=110, N_S=101, N_I=21, iterations=1000):
     print("Jump diffusion validation complete. See jump_diffusion_validation.png")
     return S_grid, option_values
 
+def get_user_ticker_choice():
+    """Prompt user to choose between manual ticker selection or hot ticker scanner"""
+    print("\n" + "="*60)
+    print("  FRANKLINE & CO. HJB OPTIMAL MARKET MAKING STRATEGY")
+    print("="*60)
+    print("\n1. Select a specific ticker for market making")
+    print("2. Use the hot ticker scanner to automatically select active markets")
+    
+    while True:
+        choice = input("\nEnter your choice (1 or 2): ").strip()
+        if choice == '1':
+            ticker = input("\nEnter ticker symbol (e.g., btcusdt): ").strip().lower()
+            if ticker:
+                return ticker, False  # Return ticker and flag indicating manual selection
+            else:
+                print("Invalid ticker. Please try again.")
+        elif choice == '2':
+            return None, True  # Return None and flag indicating scanner usage
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
 
 def profile_performance(solver, bid_price, ask_price, iterations=1000):
     """
@@ -748,6 +830,9 @@ class TradingDashboard:
         self.inventory_history = deque(maxlen=self.max_points)
         self.pnl_history = deque(maxlen=self.max_points)
         
+        # Resource monitoring
+        self.resource_monitor = ResourceMonitor(history_length=self.max_points)
+        
         # Current strategy state
         self.strategy_state = {
             'bid': 0,
@@ -757,12 +842,39 @@ class TradingDashboard:
             'symbol': ''
         }
         
-        # Initialize Dash app
-        self.app = dash.Dash(__name__)
+        # Initialize Dash app with enhanced styling
+        self.app = dash.Dash(
+            __name__, 
+            external_stylesheets=[
+                'https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap'
+            ]
+        )
         
-        # Create app layout with multiple graphs
+        # Create enhanced app layout
         self.app.layout = html.Div([
-            html.H1("Frankline & Co LP HJB Strategy Market Making Dashboard"),
+            # Header with logo and title
+            html.Div([
+                html.Div([
+                    html.H1("FRANKLINE & CO", style={'margin': '0', 'color': '#7DF9FF'}),
+                    html.H3("HJB Optimal Market Making", style={'margin': '0', 'color': '#E6E6E6'}),
+                ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'flex-start'}),
+                
+                html.Div([
+                    html.H3(id='symbol-header', children="Symbol: -", 
+                            style={'color': '#7DF9FF', 'margin': '0 20px 0 0'}),
+                    html.H3(id='status-header', children="Status: Running", 
+                            style={'color': '#00FF00', 'margin': '0'}),
+                ], style={'display': 'flex', 'alignItems': 'center'}),
+            ], style={
+                'display': 'flex', 
+                'justifyContent': 'space-between',
+                'alignItems': 'center',
+                'padding': '20px',
+                'borderBottom': '1px solid #555',
+                'backgroundColor': '#1E1E1E',
+                'borderRadius': '10px 10px 0 0',
+                'marginBottom': '20px'
+            }),
             
             dcc.Interval(
                 id='interval-component',
@@ -770,96 +882,337 @@ class TradingDashboard:
                 n_intervals=0
             ),
             
+            # Main dashboard content
             html.Div([
+                # Price chart panel
                 html.Div([
-                    html.H3(id='symbol-header', children="Symbol: -"),
-                    html.H3(id='status-header', children="Status: Running"),
-                ], style={'display': 'flex', 'justifyContent': 'space-between'}),
+                    html.H3("Market Prices & Quotes", 
+                            style={'textAlign': 'center', 'color': '#CCCCCC'}),
+                    dcc.Graph(id='price-chart', style={'height': '350px'}),
+                ], style={
+                    'backgroundColor': '#2A2A2A',
+                    'borderRadius': '10px',
+                    'padding': '15px',
+                    'marginBottom': '20px',
+                    'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
+                }),
                 
+                # Second row with position and PnL
                 html.Div([
-                    dcc.Graph(id='price-chart', style={'height': '400px'}),
+                    # Position chart
+                    html.Div([
+                        html.H3("Position/Inventory", 
+                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
+                        dcc.Graph(id='position-chart', style={'height': '300px'}),
+                    ], style={
+                        'width': '49%',
+                        'display': 'inline-block',
+                        'backgroundColor': '#2A2A2A',
+                        'borderRadius': '10px',
+                        'padding': '15px',
+                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
+                    }),
+                    
+                    # PnL chart
+                    html.Div([
+                        html.H3("Cumulative P&L", 
+                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
+                        dcc.Graph(id='pnl-chart', style={'height': '300px'}),
+                    ], style={
+                        'width': '49%',
+                        'float': 'right',
+                        'display': 'inline-block',
+                        'backgroundColor': '#2A2A2A',
+                        'borderRadius': '10px',
+                        'padding': '15px',
+                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
+                    }),
                 ], style={'marginBottom': '20px'}),
                 
+                # Third row with system resources and stats
                 html.Div([
-                    dcc.Graph(id='position-chart', style={'height': '300px', 'width': '49%', 'display': 'inline-block'}),
-                    dcc.Graph(id='pnl-chart', style={'height': '300px', 'width': '49%', 'display': 'inline-block'}),
+                    # System resources
+                    html.Div([
+                        html.H3("System Resources", 
+                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
+                        dcc.Graph(id='resource-chart', style={'height': '300px'}),
+                    ], style={
+                        'width': '49%',
+                        'display': 'inline-block',
+                        'backgroundColor': '#2A2A2A',
+                        'borderRadius': '10px',
+                        'padding': '15px',
+                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
+                    }),
+                    
+                    # Stats table
+                    html.Div([
+                        html.H3("Strategy Metrics", 
+                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
+                        html.Div(id='current-stats', style={'color': '#E6E6E6'})
+                    ], style={
+                        'width': '49%',
+                        'float': 'right',
+                        'display': 'inline-block',
+                        'backgroundColor': '#2A2A2A',
+                        'borderRadius': '10px',
+                        'padding': '15px',
+                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
+                    }),
                 ]),
-                
-                html.Div(id='current-stats', style={'marginTop': '20px'})
-            ])
-        ])
+            ], style={'padding': '0 20px 20px 20px'}),
+        ], style={
+            'fontFamily': 'Roboto, sans-serif',
+            'backgroundColor': '#121212',
+            'margin': '0 auto',
+            'maxWidth': '1600px'
+        })
         
-        # Define callbacks
+        # Define callbacks with enhanced visualizations
         @self.app.callback(
             [Output('price-chart', 'figure'),
              Output('position-chart', 'figure'),
              Output('pnl-chart', 'figure'),
+             Output('resource-chart', 'figure'),
              Output('current-stats', 'children'),
              Output('symbol-header', 'children')],
             [Input('interval-component', 'n_intervals')]
         )
         def update_graphs(n):
+            # Update resource monitor
+            self.resource_monitor.update()
+            
             # Time series for x-axis (convert to readable format)
             x_data = [t.strftime('%H:%M:%S') for t in self.timestamps] if self.timestamps else []
             
-            # Price chart with bid/ask quotes
+            # Enhanced price chart with bid/ask quotes
             price_fig = go.Figure()
-            price_fig.add_trace(go.Scatter(x=x_data, y=list(self.mid_prices), name='Mid Price', line=dict(color='white')))
-            price_fig.add_trace(go.Scatter(x=x_data, y=list(self.bid_prices), name='Bid Quote', line=dict(color='green')))
-            price_fig.add_trace(go.Scatter(x=x_data, y=list(self.ask_prices), name='Ask Quote', line=dict(color='red')))
+            if self.mid_prices:
+                price_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.mid_prices), 
+                    name='Mid Price', 
+                    line=dict(color='#7DF9FF', width=2)
+                ))
+                price_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.bid_prices), 
+                    name='Bid Quote', 
+                    line=dict(color='#32CD32', width=1.5)
+                ))
+                price_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.ask_prices), 
+                    name='Ask Quote', 
+                    line=dict(color='#FF6347', width=1.5)
+                ))
+                
+                # Add spread area
+                price_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.ask_prices),
+                    fill='tonexty', 
+                    fillcolor='rgba(255, 99, 71, 0.1)',
+                    line=dict(width=0),
+                    showlegend=False
+                ))
             
             price_fig.update_layout(
-                title="Price and Quotes",
-                xaxis_title="Time",
+                title=None,
+                xaxis_title=None,
                 yaxis_title="Price",
                 template="plotly_dark",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(l=40, r=40, t=40, b=40),
-                hovermode="x unified"
+                margin=dict(l=40, r=40, t=20, b=40),
+                hovermode="x unified",
+                plot_bgcolor='#1E1E1E',
+                paper_bgcolor='#2A2A2A',
+                font=dict(color='#E6E6E6')
             )
             
-            # Position/Inventory chart
+            # Enhanced position/inventory chart with gradient fill
             position_fig = go.Figure()
-            position_fig.add_trace(go.Scatter(x=x_data, y=list(self.inventory_history), 
-                                              name='Inventory', fill='tozeroy', line=dict(color='yellow')))
+            if self.inventory_history:
+                position_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.inventory_history), 
+                    name='Inventory', 
+                    fill='tozeroy', 
+                    fillcolor='rgba(255, 215, 0, 0.2)',
+                    line=dict(color='#FFD700', width=2)
+                ))
+                
+                # Add zero line
+                position_fig.add_shape(
+                    type="line", line=dict(color="#777", width=1, dash="dot"),
+                    x0=0, y0=0, x1=1, y1=0,
+                    xref="paper", yref="y"
+                )
+            
             position_fig.update_layout(
-                title="Position/Inventory",
-                xaxis_title="Time",
+                title=None,
+                xaxis_title=None,
                 yaxis_title="Units",
                 template="plotly_dark",
-                margin=dict(l=40, r=40, t=40, b=40)
+                margin=dict(l=40, r=40, t=20, b=40),
+                plot_bgcolor='#1E1E1E',
+                paper_bgcolor='#2A2A2A',
+                font=dict(color='#E6E6E6')
             )
             
-            # PnL chart
+            # Enhanced PnL chart
             pnl_fig = go.Figure()
-            pnl_fig.add_trace(go.Scatter(x=x_data, y=list(self.pnl_history), 
-                                         name='Cumulative P&L', line=dict(color='purple')))
+            if self.pnl_history:
+                # Determine color gradient based on positive/negative PnL
+                colors = ['#FF6347' if p < 0 else '#32CD32' for p in self.pnl_history]
+                pnl_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.pnl_history), 
+                    name='P&L', 
+                    line=dict(color='#9370DB', width=2),
+                    fill='tozeroy', 
+                    fillcolor='rgba(147, 112, 219, 0.2)'
+                ))
+                
+                # Add zero line
+                pnl_fig.add_shape(
+                    type="line", line=dict(color="#777", width=1, dash="dot"),
+                    x0=0, y0=0, x1=1, y1=0,
+                    xref="paper", yref="y"
+                )
+            
             pnl_fig.update_layout(
-                title="Cumulative P&L",
-                xaxis_title="Time",
+                title=None,
+                xaxis_title=None,
                 yaxis_title="P&L",
                 template="plotly_dark",
-                margin=dict(l=40, r=40, t=40, b=40)
+                margin=dict(l=40, r=40, t=20, b=40),
+                plot_bgcolor='#1E1E1E',
+                paper_bgcolor='#2A2A2A',
+                font=dict(color='#E6E6E6')
             )
             
-            # Current stats table
-            if self.timestamps:
-                stats = html.Table([
-                    html.Thead(html.Tr([html.Th("Metric"), html.Th("Value")])),
-                    html.Tbody([
-                        html.Tr([html.Td("Current Bid"), html.Td(f"{self.strategy_state['bid']:.4f}")]),
-                        html.Tr([html.Td("Current Ask"), html.Td(f"{self.strategy_state['ask']:.4f}")]),
-                        html.Tr([html.Td("Spread"), html.Td(f"{(self.strategy_state['ask'] - self.strategy_state['bid']):.4f}")]),
-                        html.Tr([html.Td("Current Position"), html.Td(f"{self.strategy_state['inventory']}")]),
-                        html.Tr([html.Td("Current P&L"), html.Td(f"{self.strategy_state['pnl']:.4f}")]),
-                    ])
-                ], style={'width': '100%', 'border': '1px solid white'})
-            else:
-                stats = html.Div("Waiting for data...")
+            # Resource usage chart
+            resource_fig = go.Figure()
             
+            # Only add traces if we have data
+            if self.resource_monitor.timestamps:
+                resource_x = [t.strftime('%H:%M:%S') for t in self.resource_monitor.timestamps]
+                
+                # CPU Usage
+                resource_fig.add_trace(go.Scatter(
+                    x=resource_x, 
+                    y=list(self.resource_monitor.cpu_usage),
+                    name='CPU %', 
+                    line=dict(color='#00CED1', width=2)
+                ))
+                
+                # Memory Usage
+                resource_fig.add_trace(go.Scatter(
+                    x=resource_x, 
+                    y=list(self.resource_monitor.memory_usage),
+                    name='RAM %', 
+                    line=dict(color='#FF8C00', width=2)
+                ))
+                
+                # GPU metrics if available
+                if self.resource_monitor.has_gpu:
+                    resource_fig.add_trace(go.Scatter(
+                        x=resource_x, 
+                        y=list(self.resource_monitor.gpu_usage),
+                        name='GPU %', 
+                        line=dict(color='#7FFF00', width=2)
+                    ))
+                    
+                    resource_fig.add_trace(go.Scatter(
+                        x=resource_x, 
+                        y=list(self.resource_monitor.gpu_memory),
+                        name='GPU RAM %', 
+                        line=dict(color='#FF1493', width=2)
+                    ))
+            
+            resource_fig.update_layout(
+                title=None,
+                xaxis_title=None,
+                yaxis_title="Usage %",
+                template="plotly_dark",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=40, r=40, t=20, b=40),
+                hovermode="x unified",
+                plot_bgcolor='#1E1E1E',
+                paper_bgcolor='#2A2A2A',
+                font=dict(color='#E6E6E6')
+            )
+            
+            # Set y-axis range for resource chart
+            resource_fig.update_yaxes(range=[0, 105])
+            
+            # Enhanced stats table
+            if self.timestamps:
+                # Create a styled table
+                stats_table = html.Table([
+                    # Header row
+                    html.Tr([
+                        html.Th("Metric", style={'textAlign': 'left', 'padding': '10px', 'borderBottom': '1px solid #555'}),
+                        html.Th("Value", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #555'})
+                    ]),
+                    # Data rows
+                    html.Tr([
+                        html.Td("Current Bid", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"{self.strategy_state['bid']:.4f}", style={'textAlign': 'right', 'padding': '10px', 'color': '#32CD32', 'borderBottom': '1px solid #333'})
+                    ]),
+                    html.Tr([
+                        html.Td("Current Ask", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"{self.strategy_state['ask']:.4f}", style={'textAlign': 'right', 'padding': '10px', 'color': '#FF6347', 'borderBottom': '1px solid #333'})
+                    ]),
+                    html.Tr([
+                        html.Td("Spread", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"{(self.strategy_state['ask'] - self.strategy_state['bid']):.4f}", 
+                               style={'textAlign': 'right', 'padding': '10px', 'color': '#9370DB', 'borderBottom': '1px solid #333'})
+                    ]),
+                    html.Tr([
+                        html.Td("Current Position", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"{self.strategy_state['inventory']}", 
+                               style={'textAlign': 'right', 'padding': '10px', 
+                                     'color': '#32CD32' if self.strategy_state['inventory'] >= 0 else '#FF6347',
+                                     'borderBottom': '1px solid #333'})
+                    ]),
+                    html.Tr([
+                        html.Td("Current P&L", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"{self.strategy_state['pnl']:.4f}", 
+                               style={'textAlign': 'right', 'padding': '10px', 
+                                     'color': '#32CD32' if self.strategy_state['pnl'] >= 0 else '#FF6347',
+                                     'borderBottom': '1px solid #333'})
+                    ]),
+                    # Add system resource data
+                    html.Tr([
+                        html.Td("CPU Usage", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"{self.resource_monitor.cpu_usage[-1]:.1f}%", 
+                               style={'textAlign': 'right', 'padding': '10px', 'color': '#00CED1', 'borderBottom': '1px solid #333'})
+                    ]),
+                    html.Tr([
+                        html.Td("Memory Usage", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"{self.resource_monitor.memory_usage[-1]:.1f}%", 
+                               style={'textAlign': 'right', 'padding': '10px', 'color': '#FF8C00', 'borderBottom': '1px solid #333'})
+                    ]),
+                ], style={'width': '100%', 'borderCollapse': 'collapse'})
+                
+                # Add GPU stats if available
+                if self.resource_monitor.has_gpu:
+                    stats_table.children.extend([
+                        html.Tr([
+                            html.Td("GPU Usage", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"{self.resource_monitor.gpu_usage[-1]:.1f}%", 
+                                  style={'textAlign': 'right', 'padding': '10px', 'color': '#7FFF00', 'borderBottom': '1px solid #333'})
+                        ]),
+                        html.Tr([
+                            html.Td("GPU Memory", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"{self.resource_monitor.gpu_memory[-1]:.1f}%", 
+                                  style={'textAlign': 'right', 'padding': '10px', 'color': '#FF1493', 'borderBottom': '1px solid #333'})
+                        ])
+                    ])
+            else:
+                stats_table = html.Div("Waiting for data...", 
+                                      style={'textAlign': 'center', 'padding': '40px', 'color': '#999'})
+            
+            # Update symbol header with more styling
             symbol_header = f"Symbol: {self.strategy_state['symbol'].upper()}"
             
-            return price_fig, position_fig, pnl_fig, stats, symbol_header
+            return price_fig, position_fig, pnl_fig, resource_fig, stats_table, symbol_header
     
     def update(self, strategy_state):
         """Update dashboard with new data"""
@@ -876,7 +1229,7 @@ class TradingDashboard:
         self.inventory_history.append(strategy_state['inventory'])
         self.pnl_history.append(strategy_state.get('pnl', 0))
         
-        # Print current status to console
+        # Print current status to console in a nice format
         print(tabulate(
             [[f"{now}", f"{strategy_state['bid']:.4f}", f"{strategy_state['ask']:.4f}", 
               f"{strategy_state['inventory']:.2f}", f"{strategy_state.get('pnl', 0):.4f}"]],
@@ -893,6 +1246,11 @@ class TradingDashboard:
         self.thread.daemon = True
         self.thread.start()
         print(f"Dashboard started at http://localhost:8050")
+    
+    def cleanup(self):
+        """Clean up resources"""
+        if hasattr(self, 'resource_monitor'):
+            self.resource_monitor.cleanup()
 
 class CryptoHeatScanner:
     def __init__(self, top_n=5, update_interval=60):
@@ -984,29 +1342,37 @@ class CryptoHeatScanner:
 
 
 def main():
-
     print("Initializing HJB Market Making Strategy...")
     
-    # Initialize hot crypto scanner
-    scanner = CryptoHeatScanner(top_n=5, update_interval=60)
-    print("Waiting for hot cryptocurrency data...")
+    # Get user ticker choice
+    user_ticker, use_scanner = get_user_ticker_choice()
     
-    # Wait for scanner to collect initial data with a timeout
-    start_time = time.time()
-    while not scanner.get_rankings():
-        time.sleep(1)
-        if time.time() - start_time > 30:  # 30 seconds timeout
-            print("Timeout waiting for crypto data. Using default BTC/USDT.")
-            break
+    # Initialize hot crypto scanner if user chose it
+    scanner = None
+    if use_scanner:
+        scanner = CryptoHeatScanner(top_n=5, update_interval=60)
+        print("Waiting for hot cryptocurrency data...")
+        
+        # Wait for scanner to collect initial data with a timeout
+        start_time = time.time()
+        while not scanner.get_rankings():
+            time.sleep(1)
+            if time.time() - start_time > 30:  # 30 seconds timeout
+                print("Timeout waiting for crypto data. Using default BTC/USDT.")
+                break
+        
+        # Get the hottest cryptocurrency
+        symbol = scanner.get_top_symbol() or "btcusdt"  # Default to BTC if none found
+        print(f"Selected {symbol} for market making based on activity")
+    else:
+        # Use user-specified ticker
+        symbol = user_ticker
+        print(f"Using user-selected ticker: {symbol}")
     
-    # Get the hottest cryptocurrency
-    symbol = scanner.get_top_symbol() or "btcusdt"  # Default to BTC if none found
-    print(f"Selected {symbol} for market making based on activity")
-    
-    # Initialize components
+    # Initialize data engine
     data_engine = DataEngine(symbol)
     
-    # Initialize dashboard early (but don't show data yet)
+    # Initialize dashboard with enhanced UI
     dashboard = TradingDashboard(update_interval=500)  # More frequent updates (500ms)
     dashboard.strategy_state['symbol'] = symbol
     dashboard.start()
@@ -1054,7 +1420,7 @@ def main():
     cumulative_pnl = 0
     filled_orders = []
     last_symbol_check = time.time()
-    symbol_check_interval = 300  # Check for new hot symbol every 5 minutes
+    symbol_check_interval = 300  # Check for new hot symbol every 5 minutes (only if using scanner)
     last_update_time = time.time()
     update_interval = 0.1  # Update at least every 100ms
     
@@ -1063,148 +1429,155 @@ def main():
     
     update_count = 0
     
-    while True:
-        try:
-            current_time = time.time()
-            update_count += 1
+    try:
+        while True:
+            try:
+                current_time = time.time()
+                update_count += 1
+                        
+                # Check periodically if a different cryptocurrency is now hotter (only if using scanner)
+                if use_scanner and current_time - last_symbol_check > symbol_check_interval:
+                    new_hot_symbol = scanner.get_top_symbol()
+                    if new_hot_symbol != symbol and new_hot_symbol is not None:
+                        print(f"Switching from {symbol} to hotter cryptocurrency {new_hot_symbol}")
+                        symbol = new_hot_symbol
+                        data_engine = DataEngine(symbol)
+                        dashboard.strategy_state['symbol'] = symbol
+                        
+                        # Reset state for new symbol
+                        current_inventory = 0
+                        
+                        # Wait for initial data
+                        wait_start = time.time()
+                        while (data_engine.latest_data['bid'] is None or data_engine.latest_data['ask'] is None):
+                            if time.time() - wait_start > 5:  # Shorter timeout when switching
+                                print(f"Using synthetic data for {symbol}")
+                                # Generate synthetic data
+                                data_engine.latest_data = {
+                                    'bid': random.uniform(100, 50000),
+                                    'ask': random.uniform(100, 50000) * 1.001,  # Ensure ask > bid
+                                    'trade': random.uniform(100, 50000),
+                                    'volume': random.uniform(0.1, 10),
+                                    'timestamp': datetime.now().timestamp()
+                                }
+                                break
+                            time.sleep(0.1)
+                        
+                        # Reset solver with new price range
+                        current_price = (data_engine.latest_data['bid'] + data_engine.latest_data['ask']) / 2
+                        solver = HJBSolver(
+                            current_price * 0.9, 
+                            current_price * 1.1,
+                            I_min, I_max,
+                            N_S=grid_size, N_I=grid_size
+                        )
                     
-            # Check periodically if a different cryptocurrency is now hotter
-            if current_time - last_symbol_check > symbol_check_interval:
-                new_hot_symbol = scanner.get_top_symbol()
-                if new_hot_symbol != symbol and new_hot_symbol is not None:
-                    print(f"Switching from {symbol} to hotter cryptocurrency {new_hot_symbol}")
-                    symbol = new_hot_symbol
-                    data_engine = DataEngine(symbol)
-                    dashboard.strategy_state['symbol'] = symbol
-                    
-                    # Reset state for new symbol
-                    current_inventory = 0
-                    
-                    # Wait for initial data
-                    wait_start = time.time()
-                    while (data_engine.latest_data['bid'] is None or data_engine.latest_data['ask'] is None):
-                        if time.time() - wait_start > 5:  # Shorter timeout when switching
-                            print(f"Using synthetic data for {symbol}")
-                            # Generate synthetic data
-                            data_engine.latest_data = {
-                                'bid': random.uniform(100, 50000),
-                                'ask': random.uniform(100, 50000) * 1.001,  # Ensure ask > bid
-                                'trade': random.uniform(100, 50000),
-                                'volume': random.uniform(0.1, 10),
-                                'timestamp': datetime.now().timestamp()
-                            }
-                            break
-                        time.sleep(0.1)
-                    
-                    # Reset solver with new price range
-                    current_price = (data_engine.latest_data['bid'] + data_engine.latest_data['ask']) / 2
-                    solver = HJBSolver(
-                        current_price * 0.9, 
-                        current_price * 1.1,
-                        I_min, I_max,
-                        N_S=grid_size, N_I=grid_size
-                    )
+                    last_symbol_check = current_time
                 
-                last_symbol_check = current_time
-            
-            # Process data queue 
-            data_processed = False
-            while not data_engine.data_queue.empty():
-                update = data_engine.data_queue.get()
-                data_processed = True
+                # Process data queue 
+                data_processed = False
+                while not data_engine.data_queue.empty():
+                    update = data_engine.data_queue.get()
+                    data_processed = True
+                    
+                    # Process any updates
+                    if update['type'] in ('book', 'trade'):
+                        # Get bid/ask from update or use latest data
+                        bid = update.get('bid', data_engine.latest_data['bid'])
+                        ask = update.get('ask', data_engine.latest_data['ask'])
+                        
+                        if bid is not None and ask is not None:
+                            # Update solver (less frequently for CPU mode)
+                            if USE_GPU or update_count % 5 == 0:
+                                solver.update(bid, ask, dt=0.001)
+                            
+                            mid_price = (bid + ask) / 2
+                            optimal_bid, optimal_ask = solver.get_optimal_quotes(mid_price, current_inventory)
+                            
+                            # When orders are executed, add them to the filled_orders list
+                            if random.random() < 0.05:  # 5% chance of execution
+                                if random.random() < 0.5:  # Buy execution
+                                    size = random.randint(1, 5)
+                                    current_inventory += size
+                                    execution_price = optimal_ask * (1 + random.uniform(-0.001, 0.001))
+                                    cumulative_pnl -= execution_price * size
+                                    print(f"BUY EXECUTED: {size} @ {execution_price:.4f}")
+                                    
+                                    # Add to filled_orders list
+                                    filled_orders.append({
+                                        'type': 'BUY',
+                                        'size': size,
+                                        'price': execution_price,
+                                        'timestamp': datetime.now(),
+                                        'symbol': symbol
+                                    })
+                                else:  # Sell execution
+                                    size = random.randint(1, 5)
+                                    current_inventory -= size
+                                    execution_price = optimal_bid * (1 + random.uniform(-0.001, 0.001))
+                                    cumulative_pnl += execution_price * size
+                                    print(f"SELL EXECUTED: {size} @ {execution_price:.4f}")
+                                    
+                                    # Add to filled_orders list
+                                    filled_orders.append({
+                                        'type': 'SELL',
+                                        'size': size,
+                                        'price': execution_price,
+                                        'timestamp': datetime.now(),
+                                        'symbol': symbol
+                                    })
                 
-                # Process any updates
-                if update['type'] in ('book', 'trade'):
-                    # Get bid/ask from update or use latest data
-                    bid = update.get('bid', data_engine.latest_data['bid'])
-                    ask = update.get('ask', data_engine.latest_data['ask'])
+                # Generate periodic updates even without new data
+                if not data_processed and current_time - last_update_time > update_interval:
+                    bid = data_engine.latest_data['bid']
+                    ask = data_engine.latest_data['ask']
                     
                     if bid is not None and ask is not None:
-                        # Update solver (less frequently for CPU mode)
+                        # Add price fluctuations to simulate market movement
+                        price_change = random.uniform(-0.001, 0.001)
+                        bid *= (1 + price_change)
+                        ask *= (1 + price_change)
+                        
+                        # Update data store
+                        data_engine.latest_data['bid'] = bid
+                        data_engine.latest_data['ask'] = ask
+                        
+                        # Update solver less frequently in CPU mode
                         if USE_GPU or update_count % 5 == 0:
                             solver.update(bid, ask, dt=0.001)
                         
                         mid_price = (bid + ask) / 2
                         optimal_bid, optimal_ask = solver.get_optimal_quotes(mid_price, current_inventory)
                         
-                        # When orders are executed, add them to the filled_orders list
-                        if random.random() < 0.05:  # 5% chance of execution
-                            if random.random() < 0.5:  # Buy execution
-                                size = random.randint(1, 5)
-                                current_inventory += size
-                                execution_price = optimal_ask * (1 + random.uniform(-0.001, 0.001))
-                                cumulative_pnl -= execution_price * size
-                                print(f"BUY EXECUTED: {size} @ {execution_price:.4f}")
-                                
-                                # Add to filled_orders list
-                                filled_orders.append({
-                                    'type': 'BUY',
-                                    'size': size,
-                                    'price': execution_price,
-                                    'timestamp': datetime.now(),
-                                    'symbol': symbol
-                                })
-                            else:  # Sell execution
-                                size = random.randint(1, 5)
-                                current_inventory -= size
-                                execution_price = optimal_bid * (1 + random.uniform(-0.001, 0.001))
-                                cumulative_pnl += execution_price * size
-                                print(f"SELL EXECUTED: {size} @ {execution_price:.4f}")
-                                
-                                # Add to filled_orders list
-                                filled_orders.append({
-                                    'type': 'SELL',
-                                    'size': size,
-                                    'price': execution_price,
-                                    'timestamp': datetime.now(),
-                                    'symbol': symbol
-                                })
-            
-            # Generate periodic updates even without new data
-            if not data_processed and current_time - last_update_time > update_interval:
-                bid = data_engine.latest_data['bid']
-                ask = data_engine.latest_data['ask']
+                        # Update dashboard with new values
+                        dashboard.update({
+                            'bid': optimal_bid,
+                            'ask': optimal_ask,
+                            'inventory': current_inventory,
+                            'pnl': cumulative_pnl,
+                            'symbol': symbol
+                        })
+                    
+                    last_update_time = current_time
                 
-                if bid is not None and ask is not None:
-                    # Add price fluctuations to simulate market movement
-                    price_change = random.uniform(-0.001, 0.001)
-                    bid *= (1 + price_change)
-                    ask *= (1 + price_change)
-                    
-                    # Update data store
-                    data_engine.latest_data['bid'] = bid
-                    data_engine.latest_data['ask'] = ask
-                    
-                    # Update solver less frequently in CPU mode
-                    if USE_GPU or update_count % 5 == 0:
-                        solver.update(bid, ask, dt=0.001)
-                    
-                    mid_price = (bid + ask) / 2
-                    optimal_bid, optimal_ask = solver.get_optimal_quotes(mid_price, current_inventory)
-                    
-                    # Update dashboard with new values
-                    dashboard.update({
-                        'bid': optimal_bid,
-                        'ask': optimal_ask,
-                        'inventory': current_inventory,
-                        'pnl': cumulative_pnl,
-                        'symbol': symbol
-                    })
+                # Performance optimization: sleep longer if CPU mode
+                time.sleep(0.01 if USE_GPU else 0.05)
                 
-                last_update_time = current_time
-            
-            # Performance optimization: sleep longer if CPU mode
-            time.sleep(0.01 if USE_GPU else 0.05)
-            
-        except KeyboardInterrupt:
-            print("\nStopping market making strategy...")
-            break
-        except Exception as e:
-            print(f"Error in main loop: {str(e)}")
-            print(f"Exception type: {type(e).__name__}")
-            import traceback
-            traceback.print_exc()
-            time.sleep(1)
+            except Exception as e:
+                print(f"Error in main loop: {str(e)}")
+                print(f"Exception type: {type(e).__name__}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(1)
+                
+    except KeyboardInterrupt:
+        print("\nStopping market making strategy...")
+    finally:
+        # Clean up resources
+        if hasattr(dashboard, 'cleanup'):
+            dashboard.cleanup()
+        print("Resources cleaned up. Exiting.")
 
 if __name__ == "__main__":
     main()
+
