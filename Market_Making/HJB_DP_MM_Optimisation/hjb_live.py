@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import time
 from datetime import datetime
+from datetime import timedelta
 import plotly.graph_objects as go
 from tabulate import tabulate
 from queue import Queue
@@ -817,11 +818,163 @@ class DataEngine:
                 print(f"WebSocket connection error: {e}")
                 self.is_connected = False
                 time.sleep(1)
+
+class PortfolioTracker:
+    """
+    Tracks portfolio metrics including cash, inventory, and P&L
+    """
+    def __init__(self, initial_cash=100000.0, initial_inventory=0.0, symbol=""):
+        self.symbol = symbol
+        self.initial_cash = initial_cash
+        self.cash = initial_cash
+        self.initial_inventory = initial_inventory
+        self.inventory = initial_inventory
+        self.trades = []
+        self.last_price = None
+        
+        # Metrics
+        self.realized_pnl = 0.0
+        self.unrealized_pnl = 0.0
+        self.total_pnl = 0.0
+        self.portfolio_value = initial_cash
+        
+    def update_price(self, price):
+        """Update the last known price and recalculate unrealized P&L"""
+        if price is not None:
+            self.last_price = price
+            self._calculate_metrics()
+    
+    def execute_trade(self, size, price, trade_type):
+        """
+        Record a trade and update portfolio metrics
+        
+        Args:
+            size: Quantity traded (positive for buys, negative for sells)
+            price: Execution price
+            trade_type: 'BUY' or 'SELL'
+        """
+        # Record the trade
+        trade = {
+            'type': trade_type,
+            'size': abs(size),  # Store absolute size for clarity
+            'price': price,
+            'timestamp': datetime.now(),
+            'symbol': self.symbol
+        }
+        self.trades.append(trade)
+        
+        # Update inventory and cash
+        if trade_type == 'BUY':
+            self.cash -= price * size
+            self.inventory += size
+        else:  # SELL
+            self.cash += price * size
+            self.inventory -= size
+        
+        # Recalculate metrics
+        self._calculate_metrics()
+        
+        return trade
+    
+    def _calculate_metrics(self):
+        """Calculate current portfolio metrics"""
+        if self.last_price is None:
+            return
+            
+        # Calculate unrealized P&L
+        inventory_value = self.inventory * self.last_price
+        
+        # Calculate realized P&L based on cash flow changes
+        self.realized_pnl = self.cash - self.initial_cash + \
+                           (self.initial_inventory - self.inventory) * self.last_price
+                           
+        # Unrealized P&L is the market value of the current position
+        # minus the initial inventory value (adjusted for any realized trades)
+        self.unrealized_pnl = inventory_value - (self.initial_inventory * self.last_price)
+        
+        # Total P&L
+        self.total_pnl = self.realized_pnl + self.unrealized_pnl
+        
+        # Current portfolio value
+        self.portfolio_value = self.cash + inventory_value
+    
+    def get_metrics(self):
+        """Get current portfolio metrics as a dictionary"""
+        return {
+            'cash': self.cash,
+            'inventory': self.inventory,
+            'realized_pnl': self.realized_pnl,
+            'unrealized_pnl': self.unrealized_pnl,
+            'total_pnl': self.total_pnl,
+            'portfolio_value': self.portfolio_value,
+            'symbol': self.symbol
+        }
+
+def get_user_portfolio_setup():
+    """Prompt user to set up initial portfolio parameters"""
+    print("\nINITIAL PORTFOLIO SETUP")
+    print("-----------------------")
+    
+    # Get starting cash
+    while True:
+        try:
+            cash_input = input("Enter starting cash (default: 100000): ").strip()
+            if not cash_input:
+                initial_cash = 100000.0
+                break
+            initial_cash = float(cash_input)
+            if initial_cash < 0:
+                print("Cash must be greater than or equal to 0. Please try again.")
+                continue
+            break
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    # Get starting inventory
+    while True:
+        try:
+            inventory_input = input("Enter starting inventory (default: 0): ").strip()
+            if not inventory_input:
+                initial_inventory = 0.0
+                break
+            initial_inventory = float(inventory_input)
+            break
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    print(f"\nPortfolio initialized with ${initial_cash:.2f} cash and {initial_inventory:.4f} units of inventory.\n")
+    return initial_cash, initial_inventory
+
+
+
 class TradingDashboard:
     def __init__(self, update_interval=1000):
+        self.strategy_state = {
+            'bid': 0,
+            'ask': 0,
+            'inventory': 0,
+            'cash': 0,
+            'realized_pnl': 0,
+            'unrealized_pnl': 0,
+            'total_pnl': 0,
+            'portfolio_value': 0,
+            'pnl': 0,  # Added to ensure compatibility with older code
+            'symbol': '',
+            'initial_cash': 0
+        }
+        
         self.update_interval = update_interval  # in milliseconds
         
         # Use deques with maxlen for efficient data storage
+        self.max_points = 100  # Maximum number of points to display
+        self.timestamps = deque(maxlen=self.max_points)
+        self.mid_prices = deque(maxlen=self.max_points)
+        self.bid_prices = deque(maxlen=self.max_points)
+        self.ask_prices = deque(maxlen=self.max_points)
+        self.inventory_history = deque(maxlen=self.max_points)
+        self.pnl_history = deque(maxlen=self.max_points)
+        self.resource_monitor = ResourceMonitor(history_length=self.max_points)
+        self.update_interval = update_interval  # in milliseconds
         self.max_points = 100  # Maximum number of points to display
         self.timestamps = deque(maxlen=self.max_points)
         self.mid_prices = deque(maxlen=self.max_points)
@@ -852,28 +1005,203 @@ class TradingDashboard:
         
         # Create enhanced app layout
         self.app.layout = html.Div([
-            # Header with logo and title
             html.Div([
                 html.Div([
-                    html.H1("FRANKLINE & CO", style={'margin': '0', 'color': '#7DF9FF'}),
+                    html.H1("FRANKLINE & CO", style={'margin': '0', 'color': '#7DF9FF', 'fontWeight': '700'}),
                     html.H3("HJB Optimal Market Making", style={'margin': '0', 'color': '#E6E6E6'}),
                 ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'flex-start'}),
                 
                 html.Div([
+                    html.Div([
+                        html.Span("Status: ", style={'color': '#E6E6E6'}),
+                        html.Span("ACTIVE", id='status-indicator', 
+                                style={'color': '#00FF00', 'fontWeight': 'bold', 'marginRight': '20px'})
+                    ]),
                     html.H3(id='symbol-header', children="Symbol: -", 
-                            style={'color': '#7DF9FF', 'margin': '0 20px 0 0'}),
-                    html.H3(id='status-header', children="Status: Running", 
-                            style={'color': '#00FF00', 'margin': '0'}),
+                            style={'color': '#7DF9FF', 'margin': '0'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={
                 'display': 'flex', 
                 'justifyContent': 'space-between',
                 'alignItems': 'center',
                 'padding': '20px',
-                'borderBottom': '1px solid #555',
-                'backgroundColor': '#1E1E1E',
-                'borderRadius': '10px 10px 0 0',
-                'marginBottom': '20px'
+                'backgroundColor': '#1A1A1A',
+                'borderBottom': '2px solid #333',
+                'borderRadius': '8px 8px 0 0',
+            }),
+            
+            # Main dashboard content in a grid layout
+            html.Div([
+                # Left column (60% width) - Main charts
+                html.Div([
+                    # Market price chart (60% height of left column)
+                    html.Div([
+                        html.Div([
+                            html.H3("Market Prices & Quotes", 
+                                    style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                            html.Div(id='price-metrics', style={'fontSize': '13px', 'color': '#999'})
+                        ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                        dcc.Graph(id='price-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                    ], style={
+                        'height': '60%',
+                        'backgroundColor': '#222',
+                        'borderRadius': '8px',
+                        'padding': '15px',
+                        'marginBottom': '15px',
+                        'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                    }),
+                    
+                    # Position and PnL in horizontal layout (40% height of left column)
+                    html.Div([
+                        # Position chart
+                        html.Div([
+                            html.Div([
+                                html.H3("Position/Inventory", 
+                                        style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                                html.Div(id='inventory-metrics', style={'fontSize': '13px', 'color': '#999'})
+                            ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                            dcc.Graph(id='position-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                        ], style={
+                            'width': '50%',
+                            'height': '100%',
+                            'display': 'inline-block',
+                            'backgroundColor': '#222',
+                            'borderRadius': '8px',
+                            'padding': '15px',
+                            'boxSizing': 'border-box',
+                            'marginRight': '10px',
+                            'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                        }),
+                        
+                        # PnL chart
+                        html.Div([
+                            html.Div([
+                                html.H3("P&L Performance", 
+                                        style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                                html.Div(id='pnl-metrics', style={'fontSize': '13px', 'color': '#999'})
+                            ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                            dcc.Graph(id='pnl-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                        ], style={
+                            'width': 'calc(50% - 10px)',
+                            'height': '100%',
+                            'float': 'right',
+                            'display': 'inline-block',
+                            'backgroundColor': '#222',
+                            'borderRadius': '8px',
+                            'padding': '15px',
+                            'boxSizing': 'border-box',
+                            'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                        }),
+                    ], style={'height': '40%', 'display': 'flex'}),
+                ], style={'width': '60%', 'display': 'inline-block', 'height': '100%', 'paddingRight': '15px', 'boxSizing': 'border-box'}),
+                
+                # Right column (40% width) - Stats and resources
+                html.Div([
+                    # KPI Cards in grid layout
+                    html.Div([
+                        # Row 1: Primary KPIs
+                        html.Div([
+                            # Card 1: Portfolio Value
+                            html.Div([
+                                html.Div("Portfolio Value", style={'fontSize': '14px', 'color': '#999'}),
+                                html.Div(id='portfolio-value', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#7DF9FF', 'marginTop': '5px'}),
+                                html.Div(id='portfolio-change', style={'fontSize': '13px', 'color': '#32CD32', 'marginTop': '5px'})
+                            ], style={
+                                'width': 'calc(50% - 7px)',
+                                'backgroundColor': '#222',
+                                'borderRadius': '8px',
+                                'padding': '15px',
+                                'boxSizing': 'border-box',
+                                'marginRight': '14px',
+                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                            }),
+                            
+                            # Card 2: Total P&L
+                            html.Div([
+                                html.Div("Total P&L", style={'fontSize': '14px', 'color': '#999'}),
+                                html.Div(id='total-pnl', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#32CD32', 'marginTop': '5px'}),
+                                html.Div(id='pnl-change', style={'fontSize': '13px', 'color': '#32CD32', 'marginTop': '5px'})
+                            ], style={
+                                'width': 'calc(50% - 7px)',
+                                'backgroundColor': '#222',
+                                'borderRadius': '8px',
+                                'padding': '15px',
+                                'boxSizing': 'border-box',
+                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                            }),
+                        ], style={'display': 'flex', 'marginBottom': '15px'}),
+                        
+                        # Row 2: Secondary KPIs
+                        html.Div([
+                            # Card 3: Current Position
+                            html.Div([
+                                html.Div("Current Position", style={'fontSize': '14px', 'color': '#999'}),
+                                html.Div(id='current-position', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#E6E6E6', 'marginTop': '5px'}),
+                                html.Div(id='position-value', style={'fontSize': '13px', 'color': '#999', 'marginTop': '5px'})
+                            ], style={
+                                'width': 'calc(50% - 7px)',
+                                'backgroundColor': '#222',
+                                'borderRadius': '8px',
+                                'padding': '15px',
+                                'boxSizing': 'border-box',
+                                'marginRight': '14px',
+                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                            }),
+                            
+                            # Card 4: Cash Balance
+                            html.Div([
+                                html.Div("Cash Balance", style={'fontSize': '14px', 'color': '#999'}),
+                                html.Div(id='cash-balance', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#E6E6E6', 'marginTop': '5px'}),
+                                html.Div(id='cash-change', style={'fontSize': '13px', 'color': '#999', 'marginTop': '5px'})
+                            ], style={
+                                'width': 'calc(50% - 7px)',
+                                'backgroundColor': '#222',
+                                'borderRadius': '8px',
+                                'padding': '15px',
+                                'boxSizing': 'border-box',
+                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                            }),
+                        ], style={'display': 'flex', 'marginBottom': '15px'}),
+                    ], style={'marginBottom': '15px'}),
+                    
+                    # Strategy metrics table
+                    html.Div([
+                        html.Div([
+                            html.H3("Strategy Metrics", 
+                                    style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                            html.Div(id='strategy-updated', style={'fontSize': '13px', 'color': '#999'})
+                        ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                        html.Div(id='current-stats', style={'color': '#E6E6E6', 'height': 'calc(100% - 30px)', 'overflowY': 'auto'})
+                    ], style={
+                        'height': '35%',
+                        'backgroundColor': '#222',
+                        'borderRadius': '8px',
+                        'padding': '15px',
+                        'marginBottom': '15px',
+                        'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                    }),
+                    
+                    # System resources chart
+                    html.Div([
+                        html.Div([
+                            html.H3("System Performance", 
+                                    style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                            html.Div(id='system-metrics', style={'fontSize': '13px', 'color': '#999'})
+                        ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                        dcc.Graph(id='resource-chart', style={'height': 'calc(100% - 30px)'}, config={'displayModeBar': False}),
+                    ], style={
+                        'height': 'calc(45% - 15px)',
+                        'backgroundColor': '#222',
+                        'borderRadius': '8px',
+                        'padding': '15px',
+                        'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                    }),
+                ], style={'width': '40%', 'float': 'right', 'display': 'inline-block', 'height': '100%', 'boxSizing': 'border-box'}),
+            ], style={
+                'padding': '15px',
+                'backgroundColor': '#1A1A1A',
+                'height': 'calc(100vh - 80px)',  # Adjust for header height
+                'borderRadius': '0 0 8px 8px'
             }),
             
             dcc.Interval(
@@ -881,93 +1209,16 @@ class TradingDashboard:
                 interval=self.update_interval,
                 n_intervals=0
             ),
-            
-            # Main dashboard content
-            html.Div([
-                # Price chart panel
-                html.Div([
-                    html.H3("Market Prices & Quotes", 
-                            style={'textAlign': 'center', 'color': '#CCCCCC'}),
-                    dcc.Graph(id='price-chart', style={'height': '350px'}),
-                ], style={
-                    'backgroundColor': '#2A2A2A',
-                    'borderRadius': '10px',
-                    'padding': '15px',
-                    'marginBottom': '20px',
-                    'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
-                }),
-                
-                # Second row with position and PnL
-                html.Div([
-                    # Position chart
-                    html.Div([
-                        html.H3("Position/Inventory", 
-                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
-                        dcc.Graph(id='position-chart', style={'height': '300px'}),
-                    ], style={
-                        'width': '49%',
-                        'display': 'inline-block',
-                        'backgroundColor': '#2A2A2A',
-                        'borderRadius': '10px',
-                        'padding': '15px',
-                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
-                    }),
-                    
-                    # PnL chart
-                    html.Div([
-                        html.H3("Cumulative P&L", 
-                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
-                        dcc.Graph(id='pnl-chart', style={'height': '300px'}),
-                    ], style={
-                        'width': '49%',
-                        'float': 'right',
-                        'display': 'inline-block',
-                        'backgroundColor': '#2A2A2A',
-                        'borderRadius': '10px',
-                        'padding': '15px',
-                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
-                    }),
-                ], style={'marginBottom': '20px'}),
-                
-                # Third row with system resources and stats
-                html.Div([
-                    # System resources
-                    html.Div([
-                        html.H3("System Resources", 
-                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
-                        dcc.Graph(id='resource-chart', style={'height': '300px'}),
-                    ], style={
-                        'width': '49%',
-                        'display': 'inline-block',
-                        'backgroundColor': '#2A2A2A',
-                        'borderRadius': '10px',
-                        'padding': '15px',
-                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
-                    }),
-                    
-                    # Stats table
-                    html.Div([
-                        html.H3("Strategy Metrics", 
-                                style={'textAlign': 'center', 'color': '#CCCCCC'}),
-                        html.Div(id='current-stats', style={'color': '#E6E6E6'})
-                    ], style={
-                        'width': '49%',
-                        'float': 'right',
-                        'display': 'inline-block',
-                        'backgroundColor': '#2A2A2A',
-                        'borderRadius': '10px',
-                        'padding': '15px',
-                        'boxShadow': '0px 4px 6px rgba(0, 0, 0, 0.3)'
-                    }),
-                ]),
-            ], style={'padding': '0 20px 20px 20px'}),
         ], style={
             'fontFamily': 'Roboto, sans-serif',
             'backgroundColor': '#121212',
-            'margin': '0 auto',
-            'maxWidth': '1600px'
+            'margin': '20px auto',
+            'maxWidth': '1600px',
+            'height': 'calc(100vh - 40px)',  # Margin top + bottom
+            'boxShadow': '0px 5px 15px rgba(0, 0, 0, 0.5)',
+            'borderRadius': '8px'
         })
-        
+            
         # Define callbacks with enhanced visualizations
         @self.app.callback(
             [Output('price-chart', 'figure'),
@@ -1145,7 +1396,14 @@ class TradingDashboard:
             if self.timestamps:
                 # Create a styled table
                 stats_table = html.Table([
-                    # Header row
+                                        # In the update_graphs callback function, modify the P&L display line
+                    html.Tr([
+                        html.Td("Current P&L", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                        html.Td(f"${self.strategy_state.get('total_pnl', self.strategy_state.get('pnl', 0)):.4f}", 
+                            style={'textAlign': 'right', 'padding': '10px', 
+                                    'color': '#32CD32' if self.strategy_state.get('total_pnl', self.strategy_state.get('pnl', 0)) >= 0 else '#FF6347',
+                                    'borderBottom': '1px solid #333'})
+                    ]),
                     html.Tr([
                         html.Th("Metric", style={'textAlign': 'left', 'padding': '10px', 'borderBottom': '1px solid #555'}),
                         html.Th("Value", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #555'})
@@ -1191,7 +1449,6 @@ class TradingDashboard:
                     ]),
                 ], style={'width': '100%', 'borderCollapse': 'collapse'})
                 
-                # Add GPU stats if available
                 if self.resource_monitor.has_gpu:
                     stats_table.children.extend([
                         html.Tr([
@@ -1214,6 +1471,42 @@ class TradingDashboard:
             
             return price_fig, position_fig, pnl_fig, resource_fig, stats_table, symbol_header
     
+    def start(self):
+        if not self.timestamps:
+            now = datetime.now()
+            base_price = 1000.0  # Default starting price
+            
+            for i in range(20):
+                # Add timestamps from 2 minutes ago to now
+                timestamp = now - timedelta(seconds=120-i*6)
+                self.timestamps.append(timestamp)
+                
+                # Create realistic price movements
+                noise = random.normalvariate(0, 0.0005)  # Small price variations
+                trend = 0.0001 * i  # Small upward trend
+                
+                mid_price = base_price * (1 + noise + trend)
+                bid_price = mid_price * 0.999
+                ask_price = mid_price * 1.001
+                
+                self.mid_prices.append(mid_price)
+                self.bid_prices.append(bid_price)
+                self.ask_prices.append(ask_price)
+                
+                # Add initial flat positions and P&L
+                init_inventory = self.strategy_state.get('inventory', 0)
+                self.inventory_history.append(init_inventory)
+                
+                init_pnl = 0.0
+                self.pnl_history.append(init_pnl)
+        
+        # Start the dashboard thread
+        self.thread = threading.Thread(target=self.run)
+        self.thread.daemon = True
+        self.thread.start()
+        print(f"Dashboard started at http://localhost:8050")
+
+
     def update(self, strategy_state):
         """Update dashboard with new data"""
         now = datetime.now()
@@ -1221,36 +1514,64 @@ class TradingDashboard:
         # Update strategy state
         self.strategy_state = strategy_state
         
-        # Update data containers
+        # Make sure 'pnl' is always populated (for backward compatibility)
+        if 'pnl' not in self.strategy_state and 'total_pnl' in self.strategy_state:
+            self.strategy_state['pnl'] = self.strategy_state['total_pnl']
+        
+        # Update data containers with smoothing to avoid scattered appearance
         self.timestamps.append(now)
-        self.mid_prices.append((strategy_state['bid'] + strategy_state['ask'])/2)
-        self.bid_prices.append(strategy_state['bid'])
-        self.ask_prices.append(strategy_state['ask'])
-        self.inventory_history.append(strategy_state['inventory'])
-        self.pnl_history.append(strategy_state.get('pnl', 0))
+        
+        # Calculate mid price and add some smoothing to avoid jumpy charts
+        mid_price = (strategy_state['bid'] + strategy_state['ask'])/2
+        if len(self.mid_prices) > 0:
+            # Apply light smoothing (90% new value, 10% previous value)
+            smoothed_mid = 0.9 * mid_price + 0.1 * self.mid_prices[-1]
+            smoothed_bid = 0.9 * strategy_state['bid'] + 0.1 * self.bid_prices[-1]
+            smoothed_ask = 0.9 * strategy_state['ask'] + 0.1 * self.ask_prices[-1]
+        else:
+            smoothed_mid = mid_price
+            smoothed_bid = strategy_state['bid']
+            smoothed_ask = strategy_state['ask']
+        
+        self.mid_prices.append(smoothed_mid)
+        self.bid_prices.append(smoothed_bid)
+        self.ask_prices.append(smoothed_ask)
+        
+        # Smooth inventory updates to avoid jumps
+        inventory = strategy_state['inventory']
+        if len(self.inventory_history) > 0:
+            # Only smooth small changes, allow big jumps for trades
+            if abs(inventory - self.inventory_history[-1]) < 1.0:
+                inventory = 0.8 * inventory + 0.2 * self.inventory_history[-1]
+        self.inventory_history.append(inventory)
+        
+        # Use 'total_pnl' if available, otherwise fallback to 'pnl'
+        pnl_value = strategy_state.get('total_pnl', strategy_state.get('pnl', 0))
+        
+        # Smooth PnL updates
+        if len(self.pnl_history) > 0:
+            # Allow PnL to jump on trades but smooth market fluctuations
+            if abs(pnl_value - self.pnl_history[-1]) < 10.0:
+                pnl_value = 0.9 * pnl_value + 0.1 * self.pnl_history[-1]
+        self.pnl_history.append(pnl_value)
         
         # Print current status to console in a nice format
         print(tabulate(
             [[f"{now}", f"{strategy_state['bid']:.4f}", f"{strategy_state['ask']:.4f}", 
-              f"{strategy_state['inventory']:.2f}", f"{strategy_state.get('pnl', 0):.4f}"]],
+            f"{strategy_state['inventory']:.2f}", f"{pnl_value:.4f}"]],
             headers=['Time', 'Bid', 'Ask', 'Position', 'P&L']
         ))
-    
-    def run(self, port=8050):
-        """Run dashboard server"""
-        self.app.run(debug=False, port=port)
-        
-    def start(self):
-        """Start dashboard in a separate thread"""
-        self.thread = threading.Thread(target=self.run)
-        self.thread.daemon = True
-        self.thread.start()
-        print(f"Dashboard started at http://localhost:8050")
-    
-    def cleanup(self):
-        """Clean up resources"""
-        if hasattr(self, 'resource_monitor'):
-            self.resource_monitor.cleanup()
+
+    def run(self):
+        try:
+            print("Starting Dash server on port 8050...")
+            # Start the Dash app server with threaded=True for better performance
+            self.app.run(debug=False, host='127.0.0.1', port=8050, threaded=True)
+            print("Dash server started successfully")
+        except Exception as e:
+            print(f"Error starting dashboard server: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 class CryptoHeatScanner:
     def __init__(self, top_n=5, update_interval=60):
@@ -1369,12 +1690,18 @@ def main():
         symbol = user_ticker
         print(f"Using user-selected ticker: {symbol}")
     
+    # Get initial portfolio setup
+    initial_cash, initial_inventory = get_user_portfolio_setup()
+    
     # Initialize data engine
     data_engine = DataEngine(symbol)
     
     # Initialize dashboard with enhanced UI
     dashboard = TradingDashboard(update_interval=500)  # More frequent updates (500ms)
     dashboard.strategy_state['symbol'] = symbol
+    dashboard.strategy_state['initial_cash'] = initial_cash
+    dashboard.strategy_state['cash'] = initial_cash
+    dashboard.strategy_state['inventory'] = initial_inventory
     dashboard.start()
     
     # Wait for initial data with timeout
@@ -1399,8 +1726,19 @@ def main():
             }
             break
     
+    # Initialize portfolio tracker
+    portfolio = PortfolioTracker(
+        initial_cash=initial_cash,
+        initial_inventory=initial_inventory,
+        symbol=symbol
+    )
+    
     # Initialize solver with current price range
     current_price = (data_engine.latest_data['bid'] + data_engine.latest_data['ask']) / 2
+    
+    # Update portfolio with initial price
+    portfolio.update_price(current_price)
+    
     S_min = current_price * 0.9
     S_max = current_price * 1.1
     I_min = -100  # Max short position
@@ -1416,8 +1754,10 @@ def main():
         jump_mean=0.0,       # Zero mean jump (symmetric)
         jump_std=0.01        # 1% standard deviation for jumps
     )
-    current_inventory = 0
-    cumulative_pnl = 0
+    
+    # Update inventory to use the initial value
+    current_inventory = initial_inventory
+    
     filled_orders = []
     last_symbol_check = time.time()
     symbol_check_interval = 300  # Check for new hot symbol every 5 minutes (only if using scanner)
@@ -1426,6 +1766,7 @@ def main():
     
     print(f"Starting market making with {symbol}...")
     print(f"Using {'GPU' if USE_GPU else 'CPU'} for computations")
+    print(f"Initial portfolio: ${initial_cash:.2f} cash, {initial_inventory:.4f} {symbol.upper()}")
     
     update_count = 0
     
@@ -1440,11 +1781,23 @@ def main():
                     new_hot_symbol = scanner.get_top_symbol()
                     if new_hot_symbol != symbol and new_hot_symbol is not None:
                         print(f"Switching from {symbol} to hotter cryptocurrency {new_hot_symbol}")
+                        
+                        # Save portfolio metrics before switching
+                        prev_metrics = portfolio.get_metrics()
+                        print(f"Portfolio before switch: ${prev_metrics['portfolio_value']:.2f} "
+                              f"(P&L: ${prev_metrics['total_pnl']:.2f})")
+                        
+                        # Set up the new symbol
                         symbol = new_hot_symbol
                         data_engine = DataEngine(symbol)
                         dashboard.strategy_state['symbol'] = symbol
                         
-                        # Reset state for new symbol
+                        # Transfer portfolio value to new symbol
+                        portfolio = PortfolioTracker(
+                            initial_cash=prev_metrics['portfolio_value'],
+                            initial_inventory=0.0,  # Start with no inventory in new symbol
+                            symbol=symbol
+                        )
                         current_inventory = 0
                         
                         # Wait for initial data
@@ -1465,6 +1818,8 @@ def main():
                         
                         # Reset solver with new price range
                         current_price = (data_engine.latest_data['bid'] + data_engine.latest_data['ask']) / 2
+                        portfolio.update_price(current_price)
+                        
                         solver = HJBSolver(
                             current_price * 0.9, 
                             current_price * 1.1,
@@ -1487,47 +1842,40 @@ def main():
                         ask = update.get('ask', data_engine.latest_data['ask'])
                         
                         if bid is not None and ask is not None:
+                            # Update portfolio with latest price
+                            mid_price = (bid + ask) / 2
+                            portfolio.update_price(mid_price)
+                            
                             # Update solver (less frequently for CPU mode)
                             if USE_GPU or update_count % 5 == 0:
                                 solver.update(bid, ask, dt=0.001)
                             
-                            mid_price = (bid + ask) / 2
                             optimal_bid, optimal_ask = solver.get_optimal_quotes(mid_price, current_inventory)
                             
                             # When orders are executed, add them to the filled_orders list
                             if random.random() < 0.05:  # 5% chance of execution
                                 if random.random() < 0.5:  # Buy execution
                                     size = random.randint(1, 5)
-                                    current_inventory += size
                                     execution_price = optimal_ask * (1 + random.uniform(-0.001, 0.001))
-                                    cumulative_pnl -= execution_price * size
-                                    print(f"BUY EXECUTED: {size} @ {execution_price:.4f}")
                                     
-                                    # Add to filled_orders list
-                                    filled_orders.append({
-                                        'type': 'BUY',
-                                        'size': size,
-                                        'price': execution_price,
-                                        'timestamp': datetime.now(),
-                                        'symbol': symbol
-                                    })
+                                    # Execute trade through portfolio tracker
+                                    trade = portfolio.execute_trade(size, execution_price, 'BUY')
+                                    current_inventory = portfolio.inventory
+                                    
+                                    print(f"BUY EXECUTED: {size} @ {execution_price:.4f}")
+                                    filled_orders.append(trade)
+                                    
                                 else:  # Sell execution
                                     size = random.randint(1, 5)
-                                    current_inventory -= size
                                     execution_price = optimal_bid * (1 + random.uniform(-0.001, 0.001))
-                                    cumulative_pnl += execution_price * size
-                                    print(f"SELL EXECUTED: {size} @ {execution_price:.4f}")
                                     
-                                    # Add to filled_orders list
-                                    filled_orders.append({
-                                        'type': 'SELL',
-                                        'size': size,
-                                        'price': execution_price,
-                                        'timestamp': datetime.now(),
-                                        'symbol': symbol
-                                    })
+                                    # Execute trade through portfolio tracker
+                                    trade = portfolio.execute_trade(size, execution_price, 'SELL')
+                                    current_inventory = portfolio.inventory
+                                    
+                                    print(f"SELL EXECUTED: {size} @ {execution_price:.4f}")
+                                    filled_orders.append(trade)
                 
-                # Generate periodic updates even without new data
                 if not data_processed and current_time - last_update_time > update_interval:
                     bid = data_engine.latest_data['bid']
                     ask = data_engine.latest_data['ask']
@@ -1542,19 +1890,29 @@ def main():
                         data_engine.latest_data['bid'] = bid
                         data_engine.latest_data['ask'] = ask
                         
+                        # Update portfolio with new price
+                        mid_price = (bid + ask) / 2
+                        portfolio.update_price(mid_price)
+                        
                         # Update solver less frequently in CPU mode
                         if USE_GPU or update_count % 5 == 0:
                             solver.update(bid, ask, dt=0.001)
                         
-                        mid_price = (bid + ask) / 2
                         optimal_bid, optimal_ask = solver.get_optimal_quotes(mid_price, current_inventory)
                         
-                        # Update dashboard with new values
+                        # Get metrics for dashboard update
+                        portfolio_metrics = portfolio.get_metrics()
+                        
+                        # Update dashboard with new values including portfolio metrics
                         dashboard.update({
                             'bid': optimal_bid,
                             'ask': optimal_ask,
-                            'inventory': current_inventory,
-                            'pnl': cumulative_pnl,
+                            'inventory': portfolio_metrics['inventory'],
+                            'cash': portfolio_metrics['cash'],
+                            'realized_pnl': portfolio_metrics['realized_pnl'],
+                            'unrealized_pnl': portfolio_metrics['unrealized_pnl'],
+                            'total_pnl': portfolio_metrics['total_pnl'],
+                            'portfolio_value': portfolio_metrics['portfolio_value'],
                             'symbol': symbol
                         })
                     
@@ -1572,12 +1930,27 @@ def main():
                 
     except KeyboardInterrupt:
         print("\nStopping market making strategy...")
+        
+        # Print final portfolio status
+        if 'portfolio' in locals():
+            metrics = portfolio.get_metrics()
+            print("\n=== FINAL PORTFOLIO STATUS ===")
+            print(f"Symbol: {symbol.upper()}")
+            print(f"Cash: ${metrics['cash']:.2f}")
+            print(f"Inventory: {metrics['inventory']:.4f} units")
+            print(f"Portfolio Value: ${metrics['portfolio_value']:.2f}")
+            print(f"Total P&L: ${metrics['total_pnl']:.2f}")
+            print(f"Number of Trades: {len(portfolio.trades)}")
+            print("============================\n")
+            
     finally:
         # Clean up resources
         if hasattr(dashboard, 'cleanup'):
             dashboard.cleanup()
         print("Resources cleaned up. Exiting.")
 
+
+
+    
 if __name__ == "__main__":
     main()
-
