@@ -32,7 +32,7 @@ class KyleDashboard:
     def _setup_layout(self):
         """Set up the dashboard layout."""
         self.app.layout = html.Div([
-            html.H1("Kyle Model: Market Microstructure Dashboard", 
+            html.H1("Frankline & Co. LP Modified Kyle Model : Trading with information disadvantage dashboard", 
                     style={'textAlign': 'center', 'color': '#2c3e50', 'marginBottom': 20}),
             
             html.Div([
