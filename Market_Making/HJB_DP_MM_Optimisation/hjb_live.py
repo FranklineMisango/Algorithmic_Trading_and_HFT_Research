@@ -16,6 +16,10 @@ from collections import deque
 import threading
 import random
 import websocket
+import time
+import threading
+from collections import deque
+import pandas as pd
 import warnings
 import os
 import psutil
@@ -59,6 +63,221 @@ except (ImportError, RuntimeError, Exception) as e:
     USE_GPU = False
     warnings.warn(f"CUDA initialization failed: {str(e)}. Falling back to CPU implementation.")
     print("Using CPU-based computation instead of GPU. Performance may be slower.")
+
+class ExchangeComparator:
+    """
+    Fetches and compares price data from multiple exchanges for a given symbol
+    """
+    def __init__(self, symbol, exchanges=None, max_history=100, update_interval=5.0):
+        """
+        Initialize exchange comparator
+        
+        Args:
+            symbol: Base trading pair (e.g. 'BTC/USDT')
+            exchanges: List of exchange IDs to monitor (default: top 5 by volume)
+            max_history: Maximum data points to keep in history
+            update_interval: How often to update data in seconds
+        """
+        self.symbol = self.normalize_symbol(symbol)
+        self.max_history = max_history
+        self.update_interval = update_interval
+        self.exchange_instances = {}
+        self.price_data = {}
+        self.timestamps = deque(maxlen=max_history)
+        self.running = True
+        
+        # Default exchanges if none provided (top by volume)
+        self.exchanges = exchanges or ['binance', 'coinbase', 'kraken', 'kucoin', 'okx']
+        
+        # Initialize exchange connections
+        self._initialize_exchanges()
+        
+        # Start data collection thread
+        self.thread = threading.Thread(target=self._update_thread)
+        self.thread.daemon = True
+        self.thread.start()
+    
+    def normalize_symbol(self, symbol):
+        """Convert symbol to standard format for comparison across exchanges"""
+        # Handle 'btcusdt' format
+        if '/' not in symbol:
+            # Extract potential base/quote
+            if symbol.endswith('usdt'):
+                base = symbol[:-4].upper()
+                return f"{base}/USDT"
+            # Other naming patterns could be handled here
+        return symbol.upper()
+    
+    def _initialize_exchanges(self):
+        """Set up connections to all specified exchanges"""
+        for exchange_id in self.exchanges:
+            try:
+                # Initialize the exchange with rate limiting parameters
+                exchange_class = getattr(ccxt, exchange_id)
+                self.exchange_instances[exchange_id] = exchange_class({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'spot'}
+                })
+                self.price_data[exchange_id] = deque(maxlen=self.max_history)
+                print(f"Initialized connection to {exchange_id}")
+            except Exception as e:
+                print(f"Error initializing {exchange_id}: {e}")
+    
+    def _update_thread(self):
+        """Background thread to update price data from all exchanges"""
+        while self.running:
+            timestamp = datetime.now()
+            self.timestamps.append(timestamp)
+            
+            exchange_updates = {}
+            
+            # Fetch data from each exchange
+            for exchange_id, exchange in self.exchange_instances.items():
+                try:
+                    # Normalize symbol for this specific exchange
+                    exchange_symbol = self.symbol
+                    if exchange.markets:
+                        # Find closest matching symbol
+                        available_symbols = list(exchange.markets.keys())
+                        base, quote = self.symbol.split('/')
+                        
+                        # Try different symbol formats
+                        candidates = [
+                            f"{base}/{quote}",
+                            f"{base}{quote}",
+                            f"{base}-{quote}",
+                            f"{base.lower()}/{quote.lower()}",
+                        ]
+                        
+                        for candidate in candidates:
+                            if candidate in available_symbols:
+                                exchange_symbol = candidate
+                                break
+                    
+                    # Fetch ticker with bid/ask
+                    ticker = exchange.fetch_ticker(exchange_symbol)
+                    
+                    # Extract and store data
+                    data = {
+                        'exchange': exchange_id,
+                        'bid': ticker.get('bid'),
+                        'ask': ticker.get('ask'),
+                        'last': ticker.get('last'),
+                        'volume': ticker.get('quoteVolume', ticker.get('volume', 0)),
+                        'timestamp': timestamp
+                    }
+                    
+                    self.price_data[exchange_id].append(data)
+                    exchange_updates[exchange_id] = data
+                    
+                except Exception as e:
+                    print(f"Error fetching data from {exchange_id}: {e}")
+            
+            # Print comparison summary
+            if exchange_updates:
+                self._print_comparison(exchange_updates)
+            
+            # Sleep until next update
+            time.sleep(self.update_interval)
+    
+    def _print_comparison(self, updates):
+        """Display a summary of current price comparison"""
+        print("\n--- Exchange Price Comparison ---")
+        data = []
+        for exchange_id, update in updates.items():
+            data.append([
+                exchange_id.capitalize(),
+                f"{update.get('bid', 'N/A'):.2f}" if update.get('bid') else 'N/A',
+                f"{update.get('ask', 'N/A'):.2f}" if update.get('ask') else 'N/A',
+                f"{update.get('last', 'N/A'):.2f}" if update.get('last') else 'N/A'
+            ])
+        
+        # Calculate potential arbitrage opportunities
+        if len(data) > 1:
+            bids = [update.get('bid') for update in updates.values() if update.get('bid')]
+            asks = [update.get('ask') for update in updates.values() if update.get('ask')]
+            
+            if bids and asks:
+                max_bid = max(bids)
+                min_ask = min(asks)
+                spread = ((max_bid / min_ask) - 1) * 100 if min_ask > 0 else 0
+                
+                print(f"Max Bid: {max_bid:.2f} | Min Ask: {min_ask:.2f}")
+                print(f"Cross-Exchange Spread: {spread:.4f}%")
+                
+                if max_bid > min_ask:
+                    print(f"⚠️ ARBITRAGE OPPORTUNITY: {spread:.4f}% ⚠️")
+        
+        # Print as table
+        headers = ["Exchange", "Bid", "Ask", "Last"]
+        try:
+            from tabulate import tabulate
+            print(tabulate(data, headers=headers, tablefmt="simple"))
+        except ImportError:
+            # Fallback if tabulate is not available
+            print(" | ".join(headers))
+            for row in data:
+                print(" | ".join(str(cell) for cell in row))
+        
+        print("--------------------------------")
+    
+    def get_current_data(self):
+        """Get the most recent data from all exchanges"""
+        result = {}
+        for exchange_id, history in self.price_data.items():
+            if history:
+                result[exchange_id] = history[-1]
+        return result
+    
+    def get_data_for_chart(self):
+        """Get formatted data suitable for charting"""
+        # Create dictionary of bid/ask prices by exchange
+        chart_data = {
+            'timestamps': list(self.timestamps),
+            'exchanges': {}
+        }
+        
+        for exchange_id, history in self.price_data.items():
+            if history:
+                chart_data['exchanges'][exchange_id] = {
+                    'bids': [item.get('bid') for item in history if item.get('bid')],
+                    'asks': [item.get('ask') for item in history if item.get('ask')],
+                    'last': [item.get('last') for item in history if item.get('last')]
+                }
+        
+        return chart_data
+    
+    def calculate_arbitrage_opportunities(self):
+        """Calculate potential arbitrage opportunities between exchanges"""
+        current_data = self.get_current_data()
+        
+        opportunities = []
+        for buy_ex, buy_data in current_data.items():
+            for sell_ex, sell_data in current_data.items():
+                if buy_ex != sell_ex and buy_data.get('ask') and sell_data.get('bid'):
+                    buy_price = buy_data['ask']
+                    sell_price = sell_data['bid']
+                    profit_pct = ((sell_price / buy_price) - 1) * 100
+                    
+                    if profit_pct > 0:
+                        opportunities.append({
+                            'buy_exchange': buy_ex,
+                            'sell_exchange': sell_ex,
+                            'buy_price': buy_price,
+                            'sell_price': sell_price,
+                            'profit_pct': profit_pct
+                        })
+        
+        # Sort by profit percentage
+        opportunities.sort(key=lambda x: x['profit_pct'], reverse=True)
+        return opportunities
+    
+    def stop(self):
+        """Stop the data collection thread"""
+        self.running = False
+        if hasattr(self, 'thread'):
+            self.thread.join(timeout=1.0)
+
 
 @cuda.jit(device=True)
 def jump_operator_device(V_next, S, i, j, ds, di, params, d_S):
@@ -449,6 +668,40 @@ class HJBSolver:
             optimal_ask = optimal_bid * 1.001  # Ensure minimum spread
             
         return optimal_bid, optimal_ask
+
+    def process_potential_executions(optimal_bid, optimal_ask, last_trade_price, portfolio):
+        """Execute trades based on whether our quotes would have been hit by market trades"""
+        if last_trade_price is None:
+            return False
+        
+        trade_executed = False
+        
+        # If trade price is below or at our bid, we would have bought
+        if last_trade_price <= optimal_bid:
+            size = random.randint(1, 5)  # Still randomize size for simulation
+            execution_price = optimal_bid  # We execute at our quoted price
+            
+            # Execute trade through portfolio tracker
+            trade = portfolio.execute_trade(size, execution_price, 'BUY')
+            current_inventory = portfolio.inventory
+            
+            print(f"BUY EXECUTED: {size} @ {execution_price:.4f} (Market traded at {last_trade_price:.4f})")
+            return {'trade': trade, 'executed': True, 'type': 'BUY'}
+            
+        # If trade price is above or at our ask, we would have sold
+        elif last_trade_price >= optimal_ask:
+            size = random.randint(1, 5)  # Still randomize size for simulation
+            execution_price = optimal_ask  # We execute at our quoted price
+            
+            # Execute trade through portfolio tracker
+            trade = portfolio.execute_trade(size, execution_price, 'SELL')
+            current_inventory = portfolio.inventory
+            
+            print(f"SELL EXECUTED: {size} @ {execution_price:.4f} (Market traded at {last_trade_price:.4f})")
+            return {'trade': trade, 'executed': True, 'type': 'SELL'}
+        
+        return {'executed': False}
+
 
 def hjb_shared_memory_kernel(V, V_next, S_grid, I_grid, dt, ds, di, params):
     """GPU implementation with shared memory tiling"""
@@ -946,7 +1199,6 @@ def get_user_portfolio_setup():
     return initial_cash, initial_inventory
 
 
-
 class TradingDashboard:
     def __init__(self, update_interval=1000):
         self.strategy_state = {
@@ -973,27 +1225,17 @@ class TradingDashboard:
         self.ask_prices = deque(maxlen=self.max_points)
         self.inventory_history = deque(maxlen=self.max_points)
         self.pnl_history = deque(maxlen=self.max_points)
-        self.resource_monitor = ResourceMonitor(history_length=self.max_points)
-        self.update_interval = update_interval  # in milliseconds
-        self.max_points = 100  # Maximum number of points to display
-        self.timestamps = deque(maxlen=self.max_points)
-        self.mid_prices = deque(maxlen=self.max_points)
-        self.bid_prices = deque(maxlen=self.max_points)
-        self.ask_prices = deque(maxlen=self.max_points)
-        self.inventory_history = deque(maxlen=self.max_points)
-        self.pnl_history = deque(maxlen=self.max_points)
+        
+        # Add multi-exchange comparison data
+        self.exchange_data = {}
+        self.exchange_timestamps = deque(maxlen=self.max_points)
+        
+        # Add quote performance tracking
+        self.market_trades = deque(maxlen=self.max_points)
+        self.quote_performance = deque(maxlen=self.max_points)  # % difference between mid quote and trade
         
         # Resource monitoring
         self.resource_monitor = ResourceMonitor(history_length=self.max_points)
-        
-        # Current strategy state
-        self.strategy_state = {
-            'bid': 0,
-            'ask': 0,
-            'inventory': 0,
-            'pnl': 0,
-            'symbol': ''
-        }
         
         # Initialize Dash app with enhanced styling
         self.app = dash.Dash(
@@ -1002,213 +1244,263 @@ class TradingDashboard:
                 'https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap'
             ]
         )
-        
-        # Create enhanced app layout
+    
         self.app.layout = html.Div([
+        html.Div([
+            html.Div([
+                html.H1("FRANKLINE & CO", style={'margin': '0', 'color': '#7DF9FF', 'fontWeight': '700'}),
+                html.H3("HJB Optimal Market Making", style={'margin': '0', 'color': '#E6E6E6'}),
+            ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'flex-start'}),
+            
             html.Div([
                 html.Div([
-                    html.H1("FRANKLINE & CO", style={'margin': '0', 'color': '#7DF9FF', 'fontWeight': '700'}),
-                    html.H3("HJB Optimal Market Making", style={'margin': '0', 'color': '#E6E6E6'}),
-                ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'flex-start'}),
-                
+                    html.Span("Status: ", style={'color': '#E6E6E6'}),
+                    html.Span("ACTIVE", id='status-indicator', 
+                            style={'color': '#00FF00', 'fontWeight': 'bold', 'marginRight': '20px'})
+                ]),
+                html.H3(id='symbol-header', children="Symbol: -", 
+                        style={'color': '#7DF9FF', 'margin': '0'}),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
+        ], style={
+            'display': 'flex', 
+            'justifyContent': 'space-between',
+            'alignItems': 'center',
+            'padding': '20px',
+            'backgroundColor': '#1A1A1A',
+            'borderBottom': '2px solid #333',
+            'borderRadius': '8px 8px 0 0',
+        }),
+        
+        # Main dashboard content in a grid layout
+        html.Div([
+            # Left column (60% width) - Main charts
+            html.Div([
+                # Market price chart (60% height of left column)
                 html.Div([
                     html.Div([
-                        html.Span("Status: ", style={'color': '#E6E6E6'}),
-                        html.Span("ACTIVE", id='status-indicator', 
-                                style={'color': '#00FF00', 'fontWeight': 'bold', 'marginRight': '20px'})
-                    ]),
-                    html.H3(id='symbol-header', children="Symbol: -", 
-                            style={'color': '#7DF9FF', 'margin': '0'}),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-            ], style={
-                'display': 'flex', 
-                'justifyContent': 'space-between',
-                'alignItems': 'center',
-                'padding': '20px',
-                'backgroundColor': '#1A1A1A',
-                'borderBottom': '2px solid #333',
-                'borderRadius': '8px 8px 0 0',
-            }),
-            
-            # Main dashboard content in a grid layout
-            html.Div([
-                # Left column (60% width) - Main charts
+                        html.H3("Market Prices & Quotes", 
+                                style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                        html.Div(id='price-metrics', style={'fontSize': '13px', 'color': '#999'})
+                    ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                    dcc.Graph(id='price-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                ], style={
+                    'height': '40%',
+                    'backgroundColor': '#222',
+                    'borderRadius': '8px',
+                    'padding': '15px',
+                    'marginBottom': '15px',
+                    'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                }),
+                
+                # Quote performance chart
                 html.Div([
-                    # Market price chart (60% height of left column)
+                    html.Div([
+                        html.H3("Quote Performance", 
+                                style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                        html.Div(id='quote-metrics', style={'fontSize': '13px', 'color': '#999'})
+                    ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                    dcc.Graph(id='quote-performance-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                ], style={
+                    'height': '20%',
+                    'backgroundColor': '#222',
+                    'borderRadius': '8px',
+                    'padding': '15px',
+                    'marginBottom': '15px',
+                    'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                }),
+                
+                # Exchange comparison chart
+                html.Div([
+                    html.Div([
+                        html.H3("Multi-Exchange Comparison", 
+                                style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                        html.Div(id='exchange-metrics', style={'fontSize': '13px', 'color': '#999'})
+                    ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                    dcc.Graph(id='exchange-comparison-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                ], style={
+                    'height': '20%',
+                    'backgroundColor': '#222',
+                    'borderRadius': '8px',
+                    'padding': '15px',
+                    'marginBottom': '15px',
+                    'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                }),
+                
+                # Position and PnL in horizontal layout (40% height of left column)
+                html.Div([
+                    # Position chart
                     html.Div([
                         html.Div([
-                            html.H3("Market Prices & Quotes", 
+                            html.H3("Position/Inventory", 
                                     style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
-                            html.Div(id='price-metrics', style={'fontSize': '13px', 'color': '#999'})
+                            html.Div(id='inventory-metrics', style={'fontSize': '13px', 'color': '#999'})
                         ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
-                        dcc.Graph(id='price-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                        dcc.Graph(id='position-chart', style={'height': '100%'}, config={'displayModeBar': False}),
                     ], style={
-                        'height': '60%',
+                        'width': '50%',
+                        'height': '100%',
+                        'display': 'inline-block',
                         'backgroundColor': '#222',
                         'borderRadius': '8px',
                         'padding': '15px',
-                        'marginBottom': '15px',
+                        'boxSizing': 'border-box',
+                        'marginRight': '10px',
                         'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
                     }),
                     
-                    # Position and PnL in horizontal layout (40% height of left column)
+                    # PnL chart
                     html.Div([
-                        # Position chart
                         html.Div([
-                            html.Div([
-                                html.H3("Position/Inventory", 
-                                        style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
-                                html.Div(id='inventory-metrics', style={'fontSize': '13px', 'color': '#999'})
-                            ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
-                            dcc.Graph(id='position-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                            html.H3("P&L Performance", 
+                                    style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                            html.Div(id='pnl-metrics', style={'fontSize': '13px', 'color': '#999'})
+                        ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                        dcc.Graph(id='pnl-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                    ], style={
+                        'width': 'calc(50% - 10px)',
+                        'height': '100%',
+                        'float': 'right',
+                        'display': 'inline-block',
+                        'backgroundColor': '#222',
+                        'borderRadius': '8px',
+                        'padding': '15px',
+                        'boxSizing': 'border-box',
+                        'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                    }),
+                ], style={'height': '20%', 'display': 'flex'}),
+            ], style={'width': '60%', 'display': 'inline-block', 'height': '100%', 'paddingRight': '15px', 'boxSizing': 'border-box'}),
+            
+            # Right column (40% width) - Stats and resources
+            html.Div([
+                # KPI Cards in grid layout
+                html.Div([
+                    # Row 1: Primary KPIs
+                    html.Div([
+                        # Card 1: Portfolio Value
+                        html.Div([
+                            html.Div("Portfolio Value", style={'fontSize': '14px', 'color': '#999'}),
+                            html.Div(id='portfolio-value', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#7DF9FF', 'marginTop': '5px'}),
+                            html.Div(id='portfolio-change', style={'fontSize': '13px', 'color': '#32CD32', 'marginTop': '5px'})
                         ], style={
-                            'width': '50%',
-                            'height': '100%',
-                            'display': 'inline-block',
+                            'width': 'calc(50% - 7px)',
                             'backgroundColor': '#222',
                             'borderRadius': '8px',
                             'padding': '15px',
                             'boxSizing': 'border-box',
-                            'marginRight': '10px',
+                            'marginRight': '14px',
                             'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
                         }),
                         
-                        # PnL chart
+                        # Card 2: Total P&L
                         html.Div([
-                            html.Div([
-                                html.H3("P&L Performance", 
-                                        style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
-                                html.Div(id='pnl-metrics', style={'fontSize': '13px', 'color': '#999'})
-                            ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
-                            dcc.Graph(id='pnl-chart', style={'height': '100%'}, config={'displayModeBar': False}),
+                            html.Div("Total P&L", style={'fontSize': '14px', 'color': '#999'}),
+                            html.Div(id='total-pnl', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#32CD32', 'marginTop': '5px'}),
+                            html.Div(id='pnl-change', style={'fontSize': '13px', 'color': '#32CD32', 'marginTop': '5px'})
                         ], style={
-                            'width': 'calc(50% - 10px)',
-                            'height': '100%',
-                            'float': 'right',
-                            'display': 'inline-block',
+                            'width': 'calc(50% - 7px)',
                             'backgroundColor': '#222',
                             'borderRadius': '8px',
                             'padding': '15px',
                             'boxSizing': 'border-box',
                             'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
                         }),
-                    ], style={'height': '40%', 'display': 'flex'}),
-                ], style={'width': '60%', 'display': 'inline-block', 'height': '100%', 'paddingRight': '15px', 'boxSizing': 'border-box'}),
-                
-                # Right column (40% width) - Stats and resources
-                html.Div([
-                    # KPI Cards in grid layout
+                    ], style={'display': 'flex', 'marginBottom': '15px'}),
+                    
+                    # Row 2: Secondary KPIs
                     html.Div([
-                        # Row 1: Primary KPIs
+                        # Card 3: Current Position
                         html.Div([
-                            # Card 1: Portfolio Value
-                            html.Div([
-                                html.Div("Portfolio Value", style={'fontSize': '14px', 'color': '#999'}),
-                                html.Div(id='portfolio-value', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#7DF9FF', 'marginTop': '5px'}),
-                                html.Div(id='portfolio-change', style={'fontSize': '13px', 'color': '#32CD32', 'marginTop': '5px'})
-                            ], style={
-                                'width': 'calc(50% - 7px)',
-                                'backgroundColor': '#222',
-                                'borderRadius': '8px',
-                                'padding': '15px',
-                                'boxSizing': 'border-box',
-                                'marginRight': '14px',
-                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
-                            }),
-                            
-                            # Card 2: Total P&L
-                            html.Div([
-                                html.Div("Total P&L", style={'fontSize': '14px', 'color': '#999'}),
-                                html.Div(id='total-pnl', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#32CD32', 'marginTop': '5px'}),
-                                html.Div(id='pnl-change', style={'fontSize': '13px', 'color': '#32CD32', 'marginTop': '5px'})
-                            ], style={
-                                'width': 'calc(50% - 7px)',
-                                'backgroundColor': '#222',
-                                'borderRadius': '8px',
-                                'padding': '15px',
-                                'boxSizing': 'border-box',
-                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
-                            }),
-                        ], style={'display': 'flex', 'marginBottom': '15px'}),
+                            html.Div("Current Position", style={'fontSize': '14px', 'color': '#999'}),
+                            html.Div(id='current-position', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#E6E6E6', 'marginTop': '5px'}),
+                            html.Div(id='position-value', style={'fontSize': '13px', 'color': '#999', 'marginTop': '5px'})
+                        ], style={
+                            'width': 'calc(50% - 7px)',
+                            'backgroundColor': '#222',
+                            'borderRadius': '8px',
+                            'padding': '15px',
+                            'boxSizing': 'border-box',
+                            'marginRight': '14px',
+                            'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                        }),
                         
-                        # Row 2: Secondary KPIs
+                        # Card 4: Cash Balance
                         html.Div([
-                            # Card 3: Current Position
-                            html.Div([
-                                html.Div("Current Position", style={'fontSize': '14px', 'color': '#999'}),
-                                html.Div(id='current-position', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#E6E6E6', 'marginTop': '5px'}),
-                                html.Div(id='position-value', style={'fontSize': '13px', 'color': '#999', 'marginTop': '5px'})
-                            ], style={
-                                'width': 'calc(50% - 7px)',
-                                'backgroundColor': '#222',
-                                'borderRadius': '8px',
-                                'padding': '15px',
-                                'boxSizing': 'border-box',
-                                'marginRight': '14px',
-                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
-                            }),
-                            
-                            # Card 4: Cash Balance
-                            html.Div([
-                                html.Div("Cash Balance", style={'fontSize': '14px', 'color': '#999'}),
-                                html.Div(id='cash-balance', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#E6E6E6', 'marginTop': '5px'}),
-                                html.Div(id='cash-change', style={'fontSize': '13px', 'color': '#999', 'marginTop': '5px'})
-                            ], style={
-                                'width': 'calc(50% - 7px)',
-                                'backgroundColor': '#222',
-                                'borderRadius': '8px',
-                                'padding': '15px',
-                                'boxSizing': 'border-box',
-                                'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
-                            }),
-                        ], style={'display': 'flex', 'marginBottom': '15px'}),
-                    ], style={'marginBottom': '15px'}),
-                    
-                    # Strategy metrics table
+                            html.Div("Cash Balance", style={'fontSize': '14px', 'color': '#999'}),
+                            html.Div(id='cash-balance', style={'fontSize': '24px', 'fontWeight': 'bold', 'color': '#E6E6E6', 'marginTop': '5px'}),
+                            html.Div(id='cash-change', style={'fontSize': '13px', 'color': '#999', 'marginTop': '5px'})
+                        ], style={
+                            'width': 'calc(50% - 7px)',
+                            'backgroundColor': '#222',
+                            'borderRadius': '8px',
+                            'padding': '15px',
+                            'boxSizing': 'border-box',
+                            'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                        }),
+                    ], style={'display': 'flex', 'marginBottom': '15px'}),
+                ], style={'marginBottom': '15px'}),
+                
+                # Strategy metrics table
+                html.Div([
                     html.Div([
-                        html.Div([
-                            html.H3("Strategy Metrics", 
-                                    style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
-                            html.Div(id='strategy-updated', style={'fontSize': '13px', 'color': '#999'})
-                        ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
-                        html.Div(id='current-stats', style={'color': '#E6E6E6', 'height': 'calc(100% - 30px)', 'overflowY': 'auto'})
-                    ], style={
-                        'height': '35%',
-                        'backgroundColor': '#222',
-                        'borderRadius': '8px',
-                        'padding': '15px',
-                        'marginBottom': '15px',
-                        'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
-                    }),
-                    
-                    # System resources chart
+                        html.H3("Strategy Metrics", 
+                                style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                        html.Div(id='strategy-updated', style={'fontSize': '13px', 'color': '#999'})
+                    ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                    html.Div(id='current-stats', style={'color': '#E6E6E6', 'height': 'calc(100% - 30px)', 'overflowY': 'auto'})
+                ], style={
+                    'height': '25%',
+                    'backgroundColor': '#222',
+                    'borderRadius': '8px',
+                    'padding': '15px',
+                    'marginBottom': '15px',
+                    'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                }),
+                
+                # Exchange comparison table
+                html.Div([
                     html.Div([
-                        html.Div([
-                            html.H3("System Performance", 
-                                    style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
-                            html.Div(id='system-metrics', style={'fontSize': '13px', 'color': '#999'})
-                        ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
-                        dcc.Graph(id='resource-chart', style={'height': 'calc(100% - 30px)'}, config={'displayModeBar': False}),
-                    ], style={
-                        'height': 'calc(45% - 15px)',
-                        'backgroundColor': '#222',
-                        'borderRadius': '8px',
-                        'padding': '15px',
-                        'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
-                    }),
-                ], style={'width': '40%', 'float': 'right', 'display': 'inline-block', 'height': '100%', 'boxSizing': 'border-box'}),
-            ], style={
-                'padding': '15px',
-                'backgroundColor': '#1A1A1A',
-                'height': 'calc(100vh - 80px)',  # Adjust for header height
-                'borderRadius': '0 0 8px 8px'
-            }),
-            
-            dcc.Interval(
-                id='interval-component',
-                interval=self.update_interval,
-                n_intervals=0
-            ),
+                        html.H3("Exchange Arbitrage", 
+                                style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                        html.Div(id='arbitrage-updated', style={'fontSize': '13px', 'color': '#999'})
+                    ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                    html.Div(id='exchange-comparison-table', style={'color': '#E6E6E6', 'height': 'calc(100% - 30px)', 'overflowY': 'auto'})
+                ], style={
+                    'height': '30%',
+                    'backgroundColor': '#222',
+                    'borderRadius': '8px',
+                    'padding': '15px',
+                    'marginBottom': '15px',
+                    'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                }),
+                
+                # System resources chart
+                html.Div([
+                    html.Div([
+                        html.H3("System Performance", 
+                                style={'margin': '0', 'color': '#CCCCCC', 'fontSize': '16px'}),
+                        html.Div(id='system-metrics', style={'fontSize': '13px', 'color': '#999'})
+                    ], style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '10px'}),
+                    dcc.Graph(id='resource-chart', style={'height': 'calc(100% - 30px)'}, config={'displayModeBar': False}),
+                ], style={
+                    'height': 'calc(45% - 15px)',
+                    'backgroundColor': '#222',
+                    'borderRadius': '8px',
+                    'padding': '15px',
+                    'boxShadow': '0px 2px 4px rgba(0, 0, 0, 0.2)'
+                }),
+            ], style={'width': '40%', 'float': 'right', 'display': 'inline-block', 'height': '100%', 'boxSizing': 'border-box'}),
+        ], style={
+            'padding': '15px',
+            'backgroundColor': '#1A1A1A',
+            'height': 'calc(100vh - 80px)',  # Adjust for header height
+            'borderRadius': '0 0 8px 8px'
+        }),
+        
+        dcc.Interval(
+            id='interval-component',
+            interval=self.update_interval,
+            n_intervals=0
+        ),
         ], style={
             'fontFamily': 'Roboto, sans-serif',
             'backgroundColor': '#121212',
@@ -1218,17 +1510,22 @@ class TradingDashboard:
             'boxShadow': '0px 5px 15px rgba(0, 0, 0, 0.5)',
             'borderRadius': '8px'
         })
-            
-        # Define callbacks with enhanced visualizations
+
+            # Define callbacks with enhanced visualizations
         @self.app.callback(
             [Output('price-chart', 'figure'),
-             Output('position-chart', 'figure'),
-             Output('pnl-chart', 'figure'),
-             Output('resource-chart', 'figure'),
-             Output('current-stats', 'children'),
-             Output('symbol-header', 'children')],
+            Output('position-chart', 'figure'),
+            Output('pnl-chart', 'figure'),
+            Output('resource-chart', 'figure'),
+            Output('current-stats', 'children'),
+            Output('symbol-header', 'children'),
+            Output('quote-performance-chart', 'figure'),
+            Output('exchange-comparison-chart', 'figure'),
+            Output('exchange-comparison-table', 'children')],
             [Input('interval-component', 'n_intervals')]
         )
+            
+
         def update_graphs(n):
             # Update resource monitor
             self.resource_monitor.update()
@@ -1392,11 +1689,101 @@ class TradingDashboard:
             # Set y-axis range for resource chart
             resource_fig.update_yaxes(range=[0, 105])
             
+            # Quote performance chart
+            quote_perf_fig = go.Figure()
+            if self.market_trades and self.quote_performance:
+                # Performance line
+                quote_perf_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.quote_performance),
+                    name='Quote Efficiency',
+                    line=dict(color='#00FF00', width=2),
+                    fill='tozeroy',
+                    fillcolor='rgba(0, 255, 0, 0.1)'
+                ))
+                
+                # Add zero reference line
+                quote_perf_fig.add_shape(
+                    type="line", line=dict(color="#777", width=1, dash="dot"),
+                    x0=0, y0=0, x1=1, y1=0,
+                    xref="paper", yref="y"
+                )
+                
+                # Add comparison with market trades
+                quote_perf_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.market_trades),
+                    name='Market Trades',
+                    line=dict(color='#FF00FF', width=1, dash='dash'),
+                    opacity=0.7
+                ))
+                
+            quote_perf_fig.update_layout(
+                title=None,
+                xaxis_title=None,
+                yaxis_title="% Difference",
+                template="plotly_dark",
+                margin=dict(l=40, r=40, t=20, b=40),
+                hovermode="x unified",
+                plot_bgcolor='#1E1E1E',
+                paper_bgcolor='#2A2A2A',
+                font=dict(color='#E6E6E6')
+            )
+            
+            # Exchange comparison chart
+            exchange_fig = go.Figure()
+            if self.exchange_timestamps:
+                x_data = [t.strftime('%H:%M:%S') for t in self.exchange_timestamps]
+                
+                # Add our optimal quotes
+                exchange_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.bid_prices),
+                    name='Our Bid',
+                    line=dict(color='#32CD32', width=2, dash='dash')
+                ))
+                
+                exchange_fig.add_trace(go.Scatter(
+                    x=x_data, y=list(self.ask_prices),
+                    name='Our Ask',
+                    line=dict(color='#FF6347', width=2, dash='dash')
+                ))
+                
+                # Add other exchange data
+                colors = ['#7DF9FF', '#FF8C00', '#7FFF00', '#FF1493', '#9370DB']
+                color_idx = 0
+                
+                for exchange, data in self.exchange_data.items():
+                    if 'bids' in data and len(data['bids']) > 0:
+                        exchange_fig.add_trace(go.Scatter(
+                            x=x_data[:len(data['bids'])], y=data['bids'],
+                            name=f"{exchange.capitalize()} Bid",
+                            line=dict(color=colors[color_idx % len(colors)], width=1.5)
+                        ))
+                    
+                    if 'asks' in data and len(data['asks']) > 0:
+                        exchange_fig.add_trace(go.Scatter(
+                            x=x_data[:len(data['asks'])], y=data['asks'],
+                            name=f"{exchange.capitalize()} Ask",
+                            line=dict(color=colors[color_idx % len(colors)], width=1.5, dash='dot')
+                        ))
+                    
+                    color_idx += 1
+            
+            exchange_fig.update_layout(
+                title=None,
+                xaxis_title=None,
+                yaxis_title="Price",
+                template="plotly_dark",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=40, r=40, t=20, b=40),
+                hovermode="x unified",
+                plot_bgcolor='#1E1E1E',
+                paper_bgcolor='#2A2A2A',
+                font=dict(color='#E6E6E6')
+            )
+            
             # Enhanced stats table
             if self.timestamps:
                 # Create a styled table
                 stats_table = html.Table([
-                                        # In the update_graphs callback function, modify the P&L display line
                     html.Tr([
                         html.Td("Current P&L", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                         html.Td(f"${self.strategy_state.get('total_pnl', self.strategy_state.get('pnl', 0)):.4f}", 
@@ -1420,32 +1807,32 @@ class TradingDashboard:
                     html.Tr([
                         html.Td("Spread", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                         html.Td(f"{(self.strategy_state['ask'] - self.strategy_state['bid']):.4f}", 
-                               style={'textAlign': 'right', 'padding': '10px', 'color': '#9370DB', 'borderBottom': '1px solid #333'})
+                            style={'textAlign': 'right', 'padding': '10px', 'color': '#9370DB', 'borderBottom': '1px solid #333'})
                     ]),
                     html.Tr([
                         html.Td("Current Position", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                         html.Td(f"{self.strategy_state['inventory']}", 
-                               style={'textAlign': 'right', 'padding': '10px', 
-                                     'color': '#32CD32' if self.strategy_state['inventory'] >= 0 else '#FF6347',
-                                     'borderBottom': '1px solid #333'})
+                            style={'textAlign': 'right', 'padding': '10px', 
+                                    'color': '#32CD32' if self.strategy_state['inventory'] >= 0 else '#FF6347',
+                                    'borderBottom': '1px solid #333'})
                     ]),
                     html.Tr([
                         html.Td("Current P&L", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                         html.Td(f"{self.strategy_state['pnl']:.4f}", 
-                               style={'textAlign': 'right', 'padding': '10px', 
-                                     'color': '#32CD32' if self.strategy_state['pnl'] >= 0 else '#FF6347',
-                                     'borderBottom': '1px solid #333'})
+                            style={'textAlign': 'right', 'padding': '10px', 
+                                    'color': '#32CD32' if self.strategy_state['pnl'] >= 0 else '#FF6347',
+                                    'borderBottom': '1px solid #333'})
                     ]),
                     # Add system resource data
                     html.Tr([
                         html.Td("CPU Usage", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                         html.Td(f"{self.resource_monitor.cpu_usage[-1]:.1f}%", 
-                               style={'textAlign': 'right', 'padding': '10px', 'color': '#00CED1', 'borderBottom': '1px solid #333'})
+                            style={'textAlign': 'right', 'padding': '10px', 'color': '#00CED1', 'borderBottom': '1px solid #333'})
                     ]),
                     html.Tr([
                         html.Td("Memory Usage", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                         html.Td(f"{self.resource_monitor.memory_usage[-1]:.1f}%", 
-                               style={'textAlign': 'right', 'padding': '10px', 'color': '#FF8C00', 'borderBottom': '1px solid #333'})
+                            style={'textAlign': 'right', 'padding': '10px', 'color': '#FF8C00', 'borderBottom': '1px solid #333'})
                     ]),
                 ], style={'width': '100%', 'borderCollapse': 'collapse'})
                 
@@ -1454,23 +1841,98 @@ class TradingDashboard:
                         html.Tr([
                             html.Td("GPU Usage", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                             html.Td(f"{self.resource_monitor.gpu_usage[-1]:.1f}%", 
-                                  style={'textAlign': 'right', 'padding': '10px', 'color': '#7FFF00', 'borderBottom': '1px solid #333'})
+                                style={'textAlign': 'right', 'padding': '10px', 'color': '#7FFF00', 'borderBottom': '1px solid #333'})
                         ]),
                         html.Tr([
                             html.Td("GPU Memory", style={'padding': '10px', 'borderBottom': '1px solid #333'}),
                             html.Td(f"{self.resource_monitor.gpu_memory[-1]:.1f}%", 
-                                  style={'textAlign': 'right', 'padding': '10px', 'color': '#FF1493', 'borderBottom': '1px solid #333'})
+                                style={'textAlign': 'right', 'padding': '10px', 'color': '#FF1493', 'borderBottom': '1px solid #333'})
                         ])
                     ])
             else:
                 stats_table = html.Div("Waiting for data...", 
-                                      style={'textAlign': 'center', 'padding': '40px', 'color': '#999'})
+                                    style={'textAlign': 'center', 'padding': '40px', 'color': '#999'})
+            
+            # Exchange comparison table
+            if self.exchange_data:
+                # Create exchange comparison table
+                rows = []
+                
+                # Header row
+                rows.append(html.Tr([
+                    html.Th("Exchange", style={'textAlign': 'left', 'padding': '10px', 'borderBottom': '1px solid #555'}),
+                    html.Th("Bid", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #555'}),
+                    html.Th("Ask", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #555'}),
+                    html.Th("Last", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #555'}),
+                    html.Th("Bid-Ask %", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #555'})
+                ]))
+                
+                # Add our quotes
+                our_bid = self.strategy_state['bid']
+                our_ask = self.strategy_state['ask']
+                our_spread_pct = ((our_ask / our_bid) - 1) * 100 if our_bid > 0 else 0
+                
+                rows.append(html.Tr([
+                    html.Td("Our Quotes", style={'padding': '10px', 'borderBottom': '1px solid #333', 'fontWeight': 'bold'}),
+                    html.Td(f"{our_bid:.4f}", style={'textAlign': 'right', 'padding': '10px', 'color': '#32CD32', 'borderBottom': '1px solid #333'}),
+                    html.Td(f"{our_ask:.4f}", style={'textAlign': 'right', 'padding': '10px', 'color': '#FF6347', 'borderBottom': '1px solid #333'}),
+                    html.Td("-", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'}),
+                    html.Td(f"{our_spread_pct:.2f}%", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'})
+                ]))
+                
+                # Add exchange data
+                for exchange, data in self.exchange_data.items():
+                    if 'bids' in data and 'asks' in data and len(data['bids']) > 0 and len(data['asks']) > 0:
+                        bid = data['bids'][-1]
+                        ask = data['asks'][-1]
+                        last = data['last'][-1] if 'last' in data and len(data['last']) > 0 else "-"
+                        
+                        spread_pct = ((ask / bid) - 1) * 100 if bid > 0 else 0
+                        
+                        # Calculate if our quotes are competitive
+                        bid_class = 'color: #32CD32' if our_bid > bid else 'color: #FF6347'
+                        ask_class = 'color: #32CD32' if our_ask < ask else 'color: #FF6347'
+                        
+                        rows.append(html.Tr([
+                            html.Td(exchange.capitalize(), style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"{bid:.4f}", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"{ask:.4f}", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"{last:.4f}" if isinstance(last, (int, float)) else last, 
+                                style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"{spread_pct:.2f}%", style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'})
+                        ]))
+                
+                # Add arbitrage opportunities
+                if hasattr(self, 'arbitrage_opportunities') and self.arbitrage_opportunities:
+                    rows.append(html.Tr([
+                        html.Th("Arbitrage", style={'textAlign': 'left', 'padding': '10px', 'borderTop': '1px solid #555', 'borderBottom': '1px solid #555'}, colSpan=5)
+                    ]))
+                    
+                    for opp in self.arbitrage_opportunities[:3]:  # Show top 3 opportunities
+                        rows.append(html.Tr([
+                            html.Td(f"Buy: {opp['buy_exchange'].capitalize()}", 
+                                style={'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"@ {opp['buy_price']:.4f}", 
+                                style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"Sell: {opp['sell_exchange'].capitalize()}", 
+                                style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"@ {opp['sell_price']:.4f}", 
+                                style={'textAlign': 'right', 'padding': '10px', 'borderBottom': '1px solid #333'}),
+                            html.Td(f"+{opp['profit_pct']:.2f}%", 
+                                style={'textAlign': 'right', 'padding': '10px', 'color': '#32CD32', 'borderBottom': '1px solid #333'})
+                        ]))
+                
+                exchange_table = html.Table(rows, style={'width': '100%', 'borderCollapse': 'collapse'})
+            else:
+                exchange_table = html.Div("Waiting for exchange data...", 
+                                        style={'textAlign': 'center', 'padding': '40px', 'color': '#999'})
             
             # Update symbol header with more styling
             symbol_header = f"Symbol: {self.strategy_state['symbol'].upper()}"
             
-            return price_fig, position_fig, pnl_fig, resource_fig, stats_table, symbol_header
-    
+            return price_fig, position_fig, pnl_fig, resource_fig, stats_table, symbol_header, quote_perf_fig, exchange_fig, exchange_table
+
+            
     def start(self):
         if not self.timestamps:
             now = datetime.now()
@@ -1562,6 +2024,29 @@ class TradingDashboard:
             headers=['Time', 'Bid', 'Ask', 'Position', 'P&L']
         ))
 
+
+    def update_exchange_data(self, exchange_data, arbitrage_opportunities=None):
+        """Update dashboard with multi-exchange data"""
+        now = datetime.now()
+        self.exchange_timestamps.append(now)
+        
+        # Update exchange data
+        self.exchange_data = exchange_data
+        
+        # Update arbitrage opportunities
+        if arbitrage_opportunities is not None:
+            self.arbitrage_opportunities = arbitrage_opportunities
+            
+        # Calculate and track quote performance metrics if last trade price is available
+        if 'last_trade_price' in self.strategy_state and self.strategy_state['last_trade_price'] is not None:
+            self.market_trades.append(self.strategy_state['last_trade_price'])
+            
+            # Calculate how far our mid-quote is from the market trade (%)
+            mid_quote = (self.strategy_state['bid'] + self.strategy_state['ask']) / 2
+            if mid_quote > 0 and self.strategy_state['last_trade_price'] > 0:
+                perf_pct = ((mid_quote / self.strategy_state['last_trade_price']) - 1) * 100
+                self.quote_performance.append(perf_pct)
+                
     def run(self):
         try:
             print("Starting Dash server on port 8050...")
@@ -1572,6 +2057,8 @@ class TradingDashboard:
             print(f"Error starting dashboard server: {str(e)}")
             import traceback
             traceback.print_exc()
+
+
 
 class CryptoHeatScanner:
     def __init__(self, top_n=5, update_interval=60):
@@ -1661,7 +2148,6 @@ class CryptoHeatScanner:
         """Get current rankings of hot cryptocurrencies"""
         return self.rankings
 
-
 def main():
     print("Initializing HJB Market Making Strategy...")
     
@@ -1703,6 +2189,20 @@ def main():
     dashboard.strategy_state['cash'] = initial_cash
     dashboard.strategy_state['inventory'] = initial_inventory
     dashboard.start()
+    
+    # Initialize exchange comparator
+    comparator = ExchangeComparator(
+        symbol=symbol,
+        exchanges=['binance', 'coinbase', 'kraken', 'kucoin', 'okx'],
+        update_interval=5.0  # Update every 5 seconds to avoid rate limits
+    )
+
+    # Wait for initial exchange data
+    print("Waiting for exchange comparison data...")
+    wait_start = time.time()
+    timeout = 15  # shorter timeout for exchange data
+    while not comparator.get_current_data() and time.time() - wait_start < timeout:
+        time.sleep(1)
     
     # Wait for initial data with timeout
     wait_start = time.time()
@@ -1852,29 +2352,16 @@ def main():
                             
                             optimal_bid, optimal_ask = solver.get_optimal_quotes(mid_price, current_inventory)
                             
-                            # When orders are executed, add them to the filled_orders list
-                            if random.random() < 0.05:  # 5% chance of execution
-                                if random.random() < 0.5:  # Buy execution
-                                    size = random.randint(1, 5)
-                                    execution_price = optimal_ask * (1 + random.uniform(-0.001, 0.001))
-                                    
-                                    # Execute trade through portfolio tracker
-                                    trade = portfolio.execute_trade(size, execution_price, 'BUY')
-                                    current_inventory = portfolio.inventory
-                                    
-                                    print(f"BUY EXECUTED: {size} @ {execution_price:.4f}")
-                                    filled_orders.append(trade)
-                                    
-                                else:  # Sell execution
-                                    size = random.randint(1, 5)
-                                    execution_price = optimal_bid * (1 + random.uniform(-0.001, 0.001))
-                                    
-                                    # Execute trade through portfolio tracker
-                                    trade = portfolio.execute_trade(size, execution_price, 'SELL')
-                                    current_inventory = portfolio.inventory
-                                    
-                                    print(f"SELL EXECUTED: {size} @ {execution_price:.4f}")
-                                    filled_orders.append(trade)
+                            # Execute trades based on real market data instead of random
+                            if 'trade' in update or data_engine.latest_data['trade'] is not None:
+                                last_trade_price = update.get('price', data_engine.latest_data['trade'])
+                                if last_trade_price is not None:
+                                    execution_result = process_potential_executions(optimal_bid, optimal_ask, last_trade_price, portfolio)
+                                    if execution_result['executed']:
+                                        # Add to filled orders
+                                        filled_orders.append(execution_result['trade'])
+                                        # Update current inventory
+                                        current_inventory = portfolio.inventory
                 
                 if not data_processed and current_time - last_update_time > update_interval:
                     bid = data_engine.latest_data['bid']
@@ -1913,8 +2400,14 @@ def main():
                             'unrealized_pnl': portfolio_metrics['unrealized_pnl'],
                             'total_pnl': portfolio_metrics['total_pnl'],
                             'portfolio_value': portfolio_metrics['portfolio_value'],
-                            'symbol': symbol
+                            'symbol': symbol,
+                            'last_trade_price': data_engine.latest_data['trade']  # Add the last trade price
                         })
+                        
+                        # Update dashboard with exchange comparison data
+                        comparison_data = comparator.get_data_for_chart()['exchanges']
+                        arbitrage_opps = comparator.calculate_arbitrage_opportunities()
+                        dashboard.update_exchange_data(comparison_data, arbitrage_opps)
                     
                     last_update_time = current_time
                 
@@ -1945,12 +2438,11 @@ def main():
             
     finally:
         # Clean up resources
-        if hasattr(dashboard, 'cleanup'):
-            dashboard.cleanup()
+        if hasattr(dashboard, 'resource_monitor'):
+            dashboard.resource_monitor.cleanup()
+        if 'comparator' in locals():
+            comparator.stop()
         print("Resources cleaned up. Exiting.")
-
-
-
     
 if __name__ == "__main__":
     main()
