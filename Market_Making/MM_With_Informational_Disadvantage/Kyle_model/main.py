@@ -198,7 +198,7 @@ class KyleModelLiveTrading:
             traceback.print_exc()
 
 if __name__ == "__main__":
-    symbol = "trumpusdt"
+    symbol = "suiusdt"
     kyle_system = KyleModelLiveTrading(
         symbol=symbol,
         model_update_interval=1.0,  # Update model every second
