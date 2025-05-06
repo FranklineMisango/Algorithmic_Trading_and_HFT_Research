@@ -10,13 +10,15 @@ def get_model_config():
     Returns:
         dict: Model configuration parameters
     """
-    # Default configuration
+    # Get the home directory path
+    home_dir = os.path.expanduser("~")
+    
     config = {
         "v_high": 105.0,
         "v_low": 95.0,
         "p": 0.5,
         "alpha": 0.2,
-        "data_path": "../../../HFT_Binance_data_fetcher/crypto_data",
+        "data_path": os.path.join(home_dir, "code/Algorithmic_Trading_and_HFT_Research/HFT_Binance_data_fetcher/crypto_data"),
         "symbol": "btcusdt",
         "update_frequency": 1.0
     }
@@ -56,5 +58,8 @@ def get_model_config():
                     config[config_key] = val
             except Exception as e:
                 print(f"Error processing environment variable {env_var}: {str(e)}")
+    
+    # Ensure data directory exists
+    os.makedirs(config["data_path"], exist_ok=True)
     
     return config
