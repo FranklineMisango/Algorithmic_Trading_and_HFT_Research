@@ -36,7 +36,7 @@ config.CUDA_ENABLE_PYNVJITLINK = 1
 config.CUDA_LOW_OCCUPANCY_WARNINGS = 0
 os.environ['NUMBA_CUDA_DRIVER'] = '/usr/lib/x86_64-linux-gnu/libcuda.so'
 
-USE_GPU = False
+USE_GPU = True
 try:
     import cupy as cp
     from numba import cuda
