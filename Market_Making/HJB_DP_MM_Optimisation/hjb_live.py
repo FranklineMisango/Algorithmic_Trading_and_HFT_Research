@@ -23,6 +23,7 @@ import pandas as pd
 import warnings
 import os
 import psutil
+from websocket import enableTrace
 try:
     import pynvml
     HAS_GPU_MONITORING = True
@@ -35,7 +36,7 @@ config.CUDA_ENABLE_PYNVJITLINK = 1
 config.CUDA_LOW_OCCUPANCY_WARNINGS = 0
 os.environ['NUMBA_CUDA_DRIVER'] = '/usr/lib/x86_64-linux-gnu/libcuda.so'
 
-USE_GPU = True
+USE_GPU = False
 try:
     import cupy as cp
     from numba import cuda
@@ -956,7 +957,7 @@ class DataEngine:
         self.last_heartbeat = time.time()
         
         # Initialize websocket client with heartbeat checking
-        websocket.enableTrace(True)  # Enable debugging
+        enableTrace(True)  # Enable debugging
         
         # Start data collection thread
         self.thread = threading.Thread(target=self._ws_thread)
@@ -2051,7 +2052,7 @@ class TradingDashboard:
         try:
             print("Starting Dash server on port 8050...")
             # Start the Dash app server with threaded=True for better performance
-            self.app.run(debug=False, host='127.0.0.1', port=8050, threaded=True)
+            self.app.run(debug=False, host='0.0.0.0', port=8050, threaded=True)
             print("Dash server started successfully")
         except Exception as e:
             print(f"Error starting dashboard server: {str(e)}")
