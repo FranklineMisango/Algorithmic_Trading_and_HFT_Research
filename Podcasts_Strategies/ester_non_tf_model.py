@@ -71,40 +71,47 @@ class EsterStrategy:
         result = result.dropna()
         return result
     
-    def preprocess_data(self, df):
+    def preprocess_data(self, df, fit_scaler=True):
         """Process features and calculate returns"""
         # Create simple features from returns data
         features_df = df.copy()
         
         # Add basic technical indicators as features
         for stock in df['stock_id'].unique():
-            stock_data = df[df['stock_id'] == stock].copy()
+            stock_data = df[df['stock_id'] == stock].copy().sort_values('date')
             
-            # Rolling statistics
-            stock_data['sma_5'] = stock_data['returns'].rolling(5).mean()
-            stock_data['sma_10'] = stock_data['returns'].rolling(10).mean()
-            stock_data['volatility'] = stock_data['returns'].rolling(10).std()
-            stock_data['momentum'] = stock_data['returns'].rolling(5).sum()
+            # Rolling statistics - use shorter windows to preserve more data
+            stock_data['sma_3'] = stock_data['returns'].rolling(3, min_periods=1).mean()
+            stock_data['sma_5'] = stock_data['returns'].rolling(5, min_periods=1).mean()
+            stock_data['volatility'] = stock_data['returns'].rolling(5, min_periods=1).std()
+            stock_data['momentum'] = stock_data['returns'].rolling(3, min_periods=1).sum()
+            
+            # Fill NaN values with 0 for volatility
+            stock_data['volatility'] = stock_data['volatility'].fillna(0)
             
             # Update features_df
-            features_df.loc[features_df['stock_id'] == stock, 'sma_5'] = stock_data['sma_5']
-            features_df.loc[features_df['stock_id'] == stock, 'sma_10'] = stock_data['sma_10']
-            features_df.loc[features_df['stock_id'] == stock, 'volatility'] = stock_data['volatility']
-            features_df.loc[features_df['stock_id'] == stock, 'momentum'] = stock_data['momentum']
+            mask = features_df['stock_id'] == stock
+            features_df.loc[mask, 'sma_3'] = stock_data['sma_3'].values
+            features_df.loc[mask, 'sma_5'] = stock_data['sma_5'].values
+            features_df.loc[mask, 'volatility'] = stock_data['volatility'].values
+            features_df.loc[mask, 'momentum'] = stock_data['momentum'].values
         
-        # Drop rows with NaN values
-        features_df = features_df.dropna()
+        # Only drop rows where all feature columns are NaN
+        feature_columns = ['sma_3', 'sma_5', 'volatility', 'momentum']
+        features_df = features_df.dropna(subset=feature_columns)
         
         # Prepare features and targets
-        feature_columns = ['sma_5', 'sma_10', 'volatility', 'momentum']
         features = features_df[feature_columns]
         targets = features_df['returns']
         
-        # Normalize features
+        # Normalize features - fix data leakage
         if len(features) > 0:
-            features = self.scaler.fit_transform(features)
+            if fit_scaler:
+                features = self.scaler.fit_transform(features)
+            else:
+                features = self.scaler.transform(features)
         
-        return features, targets
+        return features, targets, features_df
 
     def calculate_ester(self, X, actual_returns):
         if len(X) == 0:
@@ -126,21 +133,31 @@ class EsterStrategy:
         if len(ester_scores) == 0:
             return np.array([])
             
-        # Rank stocks by Ester scores
-        ranked = pd.Series(ester_scores).rank(pct=True)
-        
-        # Long bottom decile, short top decile
-        long_threshold = 0.1
-        short_threshold = 0.9
-        
-        signals = np.zeros(len(ranked))
-        signals[ranked <= long_threshold] = 1    # Buy signals
-        signals[ranked >= short_threshold] = -1  # Sell signals
-        return signals
+        # Use more relaxed thresholds for signal generation
+        if len(ester_scores) >= 2:
+            # Sort scores and take extremes
+            sorted_indices = np.argsort(ester_scores)
+            signals = np.zeros(len(ester_scores))
+            
+            # Take bottom 30% as longs, top 30% as shorts
+            n_long = max(1, int(len(ester_scores) * 0.3))
+            n_short = max(1, int(len(ester_scores) * 0.3))
+            
+            signals[sorted_indices[:n_long]] = 1   # Long positions
+            signals[sorted_indices[-n_short:]] = -1  # Short positions
+            
+            return signals
+        else:
+            # If only one or two stocks, use median split
+            median_score = np.median(ester_scores)
+            signals = np.where(ester_scores < median_score, 1, -1)
+            return signals
 
     def backtest_strategy(self, data):
         # Initialize results
         results = []
+        current_positions = {}
+        position_entry_dates = {}
         
         # Get unique dates for time series analysis
         dates = sorted(data['date'].unique())
@@ -153,6 +170,21 @@ class EsterStrategy:
                 print(f"Processing date {i}/{len(dates)-self.holding}: {dates[i]}")
                 
             try:
+                current_date = dates[i]
+                
+                # Check if we need to close existing positions (holding period expired)
+                positions_to_close = []
+                for stock, entry_date in position_entry_dates.items():
+                    days_held = (pd.to_datetime(current_date) - pd.to_datetime(entry_date)).days
+                    if days_held >= self.holding:
+                        positions_to_close.append(stock)
+                
+                # Close expired positions
+                for stock in positions_to_close:
+                    if stock in current_positions:
+                        del current_positions[stock]
+                        del position_entry_dates[stock]
+                
                 # Training period
                 train_end_date = dates[i]
                 train_start_date = dates[i-self.lookback]
@@ -162,10 +194,10 @@ class EsterStrategy:
                     (data['date'] < train_end_date)
                 ]
                 
-                if len(train_data) < 20:  # Increased minimum data requirement
+                if len(train_data) < 10:  # Reduced minimum data requirement
                     continue
                     
-                X_train, y_train = self.preprocess_data(train_data)
+                X_train, y_train, _ = self.preprocess_data(train_data, fit_scaler=True)
                 
                 if len(X_train) == 0:
                     continue
@@ -174,32 +206,62 @@ class EsterStrategy:
                 self.train_models(X_train, y_train)
                 
                 # Current data for prediction
-                current_date = dates[i]
                 current_data = data[data['date'] == current_date]
                 
                 if len(current_data) == 0:
                     continue
                 
-                X_current, _ = self.preprocess_data(current_data)
-                actual_returns = current_data['returns'].values
+                X_current, _, current_features_df = self.preprocess_data(current_data, fit_scaler=False)
                 
                 if len(X_current) == 0:
                     continue
                 
                 # Calculate Ester and generate signals
+                actual_returns = current_features_df['returns'].values
                 ester = self.calculate_ester(X_current, actual_returns)
                 signals = self.generate_signals(ester)
                 
-                # Calculate strategy return
-                if len(signals) > 0:
-                    strategy_return = np.mean(signals * actual_returns)
-                    results.append({
-                        'date': current_date,
-                        'return': strategy_return
-                    })
+                # Debug: Print signal generation info
+                if i == self.lookback:  # First iteration
+                    print(f"Debug - Ester scores: {ester[:5] if len(ester) > 5 else ester}")
+                    print(f"Debug - Signals: {signals[:5] if len(signals) > 5 else signals}")
+                    print(f"Debug - Non-zero signals: {np.sum(signals != 0)}")
+                
+                # Create signal mapping by stock
+                stock_signals = {}
+                stock_returns = {}
+                for idx, (_, row) in enumerate(current_features_df.iterrows()):
+                    if idx < len(signals):
+                        stock_signals[row['stock_id']] = signals[idx]
+                        stock_returns[row['stock_id']] = row['returns']
+                
+                # Update positions based on signals
+                for stock, signal in stock_signals.items():
+                    if signal != 0 and stock not in current_positions:
+                        current_positions[stock] = signal
+                        position_entry_dates[stock] = current_date
+                
+                # Calculate portfolio return for this period
+                if current_positions:
+                    portfolio_return = 0
+                    position_count = 0
+                    
+                    for stock, position in current_positions.items():
+                        if stock in stock_returns:
+                            portfolio_return += position * stock_returns[stock]
+                            position_count += 1
+                    
+                    if position_count > 0:
+                        portfolio_return /= position_count  # Equal weight portfolio
+                        
+                        results.append({
+                            'date': current_date,
+                            'return': portfolio_return,
+                            'num_positions': position_count
+                        })
                 
             except Exception as e:
-                print(f"Error processing date {dates[i]}: {e}")
+                print(f"Error processing date {dates[i]}: {str(e)}")
                 continue
         
         print(f"Backtest completed. Generated {len(results)} trading signals.")
@@ -207,12 +269,15 @@ class EsterStrategy:
 
 
 if __name__ == "__main__": 
-    tickers = ["AAPL", "MSFT", "GOOGL", "AMZN"]  # Fix: Use list instead of string
+    tickers = ["NVDA", "PLTR"]  # Fix: Use list instead of string
     start_date = "2020-01-01"
-    end_date = "2023-12-31"
+    end_date = "2024-12-31"
     
     try:
         data = EsterStrategy.fetch_data(tickers, start_date, end_date)
+        print(f"Fetched data shape: {data.shape}")
+        print(f"Date range: {data['date'].min()} to {data['date'].max()}")
+        print(f"Unique stocks: {data['stock_id'].unique()}")
         
         # Initialize and backtest the strategy
         strategy = EsterStrategy()
@@ -226,6 +291,7 @@ if __name__ == "__main__":
             
             print(f"Strategy Annualized Return: {annualized_return:.2%}")
             print(f"Total trades: {len(portfolio_returns)}")
+            print(f"Average positions per trade: {portfolio_returns['num_positions'].mean():.1f}")
         else:
             print("No valid trading signals generated")
             
