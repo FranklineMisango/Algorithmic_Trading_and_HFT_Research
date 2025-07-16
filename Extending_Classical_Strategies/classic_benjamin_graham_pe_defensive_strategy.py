@@ -13,7 +13,7 @@ from urllib3.util.retry import Retry
 
 # Configuration
 START_DATE = '2000-01-01'
-END_DATE = '2025-04-14'
+END_DATE = '2025-07-15'
 INITIAL_CAPITAL = 10000
 CPI_SERIES = 'CPIAUCSL'
 
@@ -256,7 +256,14 @@ class GrahamBacktester:
                         'pb_ratio': info.get('priceToBook', np.nan),
                         'current_ratio': info.get('currentRatio', np.nan),
                         'market_cap': info.get('marketCap', np.nan),
-                        'revenue': info.get('totalRevenue', np.nan)
+                        'revenue': info.get('totalRevenue', np.nan),
+                        'sector': info.get('sector', 'Unknown'),
+                        'industry': info.get('industry', 'Unknown'),
+                        'beta': info.get('beta', np.nan),
+                        'profit_margin': info.get('profitMargins', np.nan),
+                        'return_on_equity': info.get('returnOnEquity', np.nan),
+                        'debt_to_equity': info.get('debtToEquity', np.nan),
+                        'dividend_yield': info.get('dividendYield', np.nan)
                     }
                 else:
                     if attempt == max_retries - 1:
@@ -268,100 +275,137 @@ class GrahamBacktester:
                 
         return {}
 
-    def _preprocess_data(self):
-        """Clean and normalize data with available information"""
-        if self.data.empty:
-            print("No data available for preprocessing")
-            return
+    def _select_diversified_portfolio(self, eligible_tickers, target_size=15):
+        """Select a diversified portfolio from eligible tickers"""
+        if len(eligible_tickers) <= target_size:
+            return eligible_tickers
         
-        print(f"Data preprocessing started...")
-        print(f"Data shape: {self.data.shape}")
+        print(f"    Selecting {target_size} diversified stocks from {len(eligible_tickers)} eligible tickers")
         
-        # Get current fundamentals for screening (only for tickers that have price data)
-        if hasattr(self, 'successful_tickers'):
-            available_tickers = self.successful_tickers
-        elif isinstance(self.data.columns, pd.MultiIndex):
-            available_tickers = self.data.columns.get_level_values(0).unique().tolist()
-        else:
-            available_tickers = self.sp500
+        # Create a DataFrame with ticker fundamentals
+        ticker_data = []
+        for ticker in eligible_tickers:
+            data = self.fundamentals.get(ticker, {})
+            if data:
+                ticker_data.append({
+                    'ticker': ticker,
+                    'sector': data.get('sector', 'Unknown'),
+                    'industry': data.get('industry', 'Unknown'),
+                    'market_cap': data.get('market_cap', 0),
+                    'pe_ratio': data.get('pe_ratio', np.nan),
+                    'pb_ratio': data.get('pb_ratio', np.nan),
+                    'beta': data.get('beta', np.nan),
+                    'profit_margin': data.get('profit_margin', np.nan),
+                    'return_on_equity': data.get('return_on_equity', np.nan),
+                    'debt_to_equity': data.get('debt_to_equity', np.nan),
+                    'dividend_yield': data.get('dividend_yield', 0)
+                })
         
-        print(f"Getting fundamental data for {len(available_tickers)} tickers...")
-        self.fundamentals = {}
+        if not ticker_data:
+            return eligible_tickers[:target_size]
         
-        # Process in batches to avoid overwhelming the API
-        batch_size = 10
-        for i in range(0, len(available_tickers), batch_size):
-            batch = available_tickers[i:i+batch_size]
-            print(f"  Processing fundamental data batch {i//batch_size + 1}/{(len(available_tickers)-1)//batch_size + 1}")
+        df = pd.DataFrame(ticker_data)
+        
+        # Sector diversification
+        sector_counts = df['sector'].value_counts()
+        print(f"    Sector distribution: {dict(sector_counts.head(10))}")
+        
+        # Define target allocation per sector (max 30% per sector)
+        max_per_sector = max(1, target_size // 3)
+        selected_tickers = []
+        
+        # First pass: Select top stocks from each major sector
+        for sector in sector_counts.index:
+            if len(selected_tickers) >= target_size:
+                break
+                
+            sector_stocks = df[df['sector'] == sector].copy()
+            if sector_stocks.empty:
+                continue
             
-            for ticker in batch:
-                self.fundamentals[ticker] = self._get_ticker_info(ticker)
+            # Sort by multiple criteria for quality
+            sector_stocks['quality_score'] = self._calculate_quality_score(sector_stocks)
+            sector_stocks = sector_stocks.sort_values('quality_score', ascending=False)
             
-            # Add delay between batches
-            time.sleep(0.5)
+            # Select up to max_per_sector stocks from this sector
+            sector_selected = min(max_per_sector, len(sector_stocks), target_size - len(selected_tickers))
+            selected_tickers.extend(sector_stocks.head(sector_selected)['ticker'].tolist())
         
-        print("Fundamental data collection completed")
+        # Second pass: Fill remaining slots with highest quality stocks
+        if len(selected_tickers) < target_size:
+            remaining_slots = target_size - len(selected_tickers)
+            remaining_stocks = df[~df['ticker'].isin(selected_tickers)].copy()
+            
+            if not remaining_stocks.empty:
+                remaining_stocks['quality_score'] = self._calculate_quality_score(remaining_stocks)
+                remaining_stocks = remaining_stocks.sort_values('quality_score', ascending=False)
+                
+                additional_tickers = remaining_stocks.head(remaining_slots)['ticker'].tolist()
+                selected_tickers.extend(additional_tickers)
         
-        # Try to extract Close and Volume data with error handling
-        try:
-            # Check if we have the expected MultiIndex structure
-            if isinstance(self.data.columns, pd.MultiIndex):
-                # Try to get Close data
-                closes = None
-                volumes = None
-                
-                # Look for Close data in different possible locations
-                if 'Close' in self.data.columns.get_level_values(1):
-                    closes = self.data.xs('Close', axis=1, level=1)
-                elif 'Adj Close' in self.data.columns.get_level_values(1):
-                    closes = self.data.xs('Adj Close', axis=1, level=1)
-                
-                # Look for Volume data
-                if 'Volume' in self.data.columns.get_level_values(1):
-                    volumes = self.data.xs('Volume', axis=1, level=1)
-                
-                if closes is not None:
-                    # Remove tickers with all NaN values
-                    closes = closes.dropna(axis=1, how='all')
-                    print(f"Close prices available for {len(closes.columns)} tickers")
-                    
-                    self.closes = closes
-                    if volumes is not None:
-                        volumes = volumes.dropna(axis=1, how='all')
-                        # Align volumes with closes
-                        common_tickers = closes.columns.intersection(volumes.columns)
-                        if len(common_tickers) > 0:
-                            self.market_cap_proxy = closes[common_tickers] * volumes[common_tickers].rolling(252).mean()
-                        else:
-                            self.market_cap_proxy = closes  # Just use price as proxy
-                    else:
-                        self.market_cap_proxy = closes  # Just use price as proxy
-                else:
-                    print("Could not find Close price data")
-                    self.closes = pd.DataFrame()
-                    self.market_cap_proxy = pd.DataFrame()
-            else:
-                # Single level columns
-                if 'Close' in self.data.columns:
-                    self.closes = self.data[['Close']].copy()
-                    if 'Volume' in self.data.columns:
-                        self.market_cap_proxy = self.data['Close'] * self.data['Volume'].rolling(252).mean()
-                    else:
-                        self.market_cap_proxy = self.data['Close']
-                else:
-                    print("Could not find Close price data in single-level columns")
-                    self.closes = pd.DataFrame()
-                    self.market_cap_proxy = pd.DataFrame()
-                    
-        except Exception as e:
-            print(f"Error in data preprocessing: {e}")
-            self.closes = pd.DataFrame()
-            self.market_cap_proxy = pd.DataFrame()
+        # Final selection summary
+        final_df = df[df['ticker'].isin(selected_tickers)]
+        final_sector_counts = final_df['sector'].value_counts()
+        print(f"    Final sector distribution: {dict(final_sector_counts)}")
+        print(f"    Selected tickers: {selected_tickers}")
         
-        print(f"Data preprocessing completed. Final close prices shape: {self.closes.shape}")
+        return selected_tickers
+    
+    def _calculate_quality_score(self, df):
+        """Calculate a composite quality score for stock selection"""
+        scores = pd.Series(0, index=df.index)
+        
+        # Market cap score (larger is better, but with diminishing returns)
+        if 'market_cap' in df.columns:
+            market_cap_score = np.log(df['market_cap'].fillna(1e9) + 1e9) / np.log(1e12)
+            scores += market_cap_score.clip(0, 1) * 0.2
+        
+        # PE ratio score (lower is better, but not too low)
+        if 'pe_ratio' in df.columns:
+            pe_ratio = df['pe_ratio'].fillna(20)
+            pe_score = np.where(
+                (pe_ratio > 0) & (pe_ratio < 25),
+                (25 - pe_ratio) / 25,
+                0
+            )
+            scores += pe_score * 0.2
+        
+        # PB ratio score (lower is better)
+        if 'pb_ratio' in df.columns:
+            pb_ratio = df['pb_ratio'].fillna(3)
+            pb_score = np.where(
+                (pb_ratio > 0) & (pb_ratio < 3),
+                (3 - pb_ratio) / 3,
+                0
+            )
+            scores += pb_score * 0.2
+        
+        # Profit margin score (higher is better)
+        if 'profit_margin' in df.columns:
+            profit_margin = df['profit_margin'].fillna(0)
+            profit_score = np.clip(profit_margin * 10, 0, 1)  # Scale to 0-1
+            scores += profit_score * 0.15
+        
+        # Return on equity score (higher is better, but cap at reasonable levels)
+        if 'return_on_equity' in df.columns:
+            roe = df['return_on_equity'].fillna(0)
+            roe_score = np.clip(roe * 5, 0, 1)  # Scale to 0-1
+            scores += roe_score * 0.15
+        
+        # Debt to equity score (lower is better)
+        if 'debt_to_equity' in df.columns:
+            debt_to_equity = df['debt_to_equity'].fillna(1)
+            debt_score = np.where(
+                debt_to_equity < 1,
+                1 - debt_to_equity,
+                0
+            )
+            scores += debt_score * 0.1
+        
+        return scores
 
     def _graham_filters(self, date):
-        """Simplified Graham criteria filters using available data"""
+        """Enhanced Graham criteria filters with storage for later selection"""
         dt = pd.to_datetime(date)
         
         # Use actual column names from the data instead of original sp500 list
@@ -375,16 +419,19 @@ class GrahamBacktester:
         if self.data.empty:
             return filtered.fillna(False)
         
+        # Store detailed filter results for analysis
+        filter_results = {}
         eligible_count = 0
+        
         for ticker in available_tickers:
             try:
                 ticker_data = self.fundamentals.get(ticker, {})
                 
                 # Size filter (use market cap if available)
                 market_cap = ticker_data.get('market_cap', 0)
-                size_ok = market_cap > 2e9 if market_cap else False  # More strict
+                size_ok = market_cap > 2e9 if market_cap else False
                 
-                # PE ratio filter - more strict Graham criteria
+                # PE ratio filter - Graham criteria
                 pe_ratio = ticker_data.get('pe_ratio', np.nan)
                 pe_ok = (pe_ratio < 15 and pe_ratio > 0) if not np.isnan(pe_ratio) else False
                 
@@ -396,13 +443,32 @@ class GrahamBacktester:
                 current_ratio = ticker_data.get('current_ratio', np.nan)
                 cr_ok = current_ratio > 2 if not np.isnan(current_ratio) else False
                 
-                # Additional filters for quality
+                # Revenue filter
                 revenue = ticker_data.get('revenue', 0)
                 revenue_ok = revenue > 1e9 if revenue else False
                 
-                # Stock must pass at least 3 out of 5 criteria (more strict)
-                criteria_passed = sum([size_ok, pe_ok, pb_ok, cr_ok, revenue_ok])
-                passed = criteria_passed >= 3
+                # Additional quality filters
+                profit_margin = ticker_data.get('profit_margin', np.nan)
+                profit_ok = profit_margin > 0.05 if not np.isnan(profit_margin) else False
+                
+                debt_to_equity = ticker_data.get('debt_to_equity', np.nan)
+                debt_ok = debt_to_equity < 1.0 if not np.isnan(debt_to_equity) else False
+                
+                # Store results for analysis
+                filter_results[ticker] = {
+                    'size_ok': size_ok,
+                    'pe_ok': pe_ok,
+                    'pb_ok': pb_ok,
+                    'cr_ok': cr_ok,
+                    'revenue_ok': revenue_ok,
+                    'profit_ok': profit_ok,
+                    'debt_ok': debt_ok,
+                    'sector': ticker_data.get('sector', 'Unknown')
+                }
+                
+                # Stock must pass at least 4 out of 7 criteria (more strict)
+                criteria_passed = sum([size_ok, pe_ok, pb_ok, cr_ok, revenue_ok, profit_ok, debt_ok])
+                passed = criteria_passed >= 4
                 
                 if passed:
                     eligible_count += 1
@@ -411,11 +477,16 @@ class GrahamBacktester:
                 
             except:
                 filtered[ticker] = False
+                filter_results[ticker] = {
+                    'size_ok': False, 'pe_ok': False, 'pb_ok': False, 'cr_ok': False,
+                    'revenue_ok': False, 'profit_ok': False, 'debt_ok': False,
+                    'sector': 'Unknown'
+                }
         
-        print(f"    Graham filters: {eligible_count} stocks passed out of {len(available_tickers)}")
+        print(f"    Initial Graham filters: {eligible_count} stocks passed out of {len(available_tickers)}")
         
-        # If too few stocks pass, relax criteria slightly
-        if eligible_count < 5:
+        # If too few stocks pass, relax criteria
+        if eligible_count < 10:
             print("    Too few stocks passed, relaxing criteria...")
             eligible_count = 0
             for ticker in available_tickers:
@@ -427,14 +498,17 @@ class GrahamBacktester:
                     size_ok = market_cap > 1e9 if market_cap else False
                     
                     pe_ratio = ticker_data.get('pe_ratio', np.nan)
-                    pe_ok = (pe_ratio < 20 and pe_ratio > 0) if not np.isnan(pe_ratio) else False
+                    pe_ok = (pe_ratio < 25 and pe_ratio > 0) if not np.isnan(pe_ratio) else False
                     
                     pb_ratio = ticker_data.get('pb_ratio', np.nan)
-                    pb_ok = (pb_ratio < 2.0 and pb_ratio > 0) if not np.isnan(pb_ratio) else False
+                    pb_ok = (pb_ratio < 3.0 and pb_ratio > 0) if not np.isnan(pb_ratio) else False
                     
-                    # At least 2 out of 3 criteria
-                    criteria_passed = sum([size_ok, pe_ok, pb_ok])
-                    passed = criteria_passed >= 2
+                    profit_margin = ticker_data.get('profit_margin', np.nan)
+                    profit_ok = profit_margin > 0.02 if not np.isnan(profit_margin) else False
+                    
+                    # At least 3 out of 4 criteria
+                    criteria_passed = sum([size_ok, pe_ok, pb_ok, profit_ok])
+                    passed = criteria_passed >= 3
                     
                     if passed:
                         eligible_count += 1
@@ -446,47 +520,13 @@ class GrahamBacktester:
                     
             print(f"    Relaxed filters: {eligible_count} stocks passed")
         
+        # Store filter results for analysis
+        self.last_filter_results = filter_results
+        
         return filtered.fillna(False)
 
-    def _risk_parity_weights(self, returns):
-        """Risk parity portfolio optimization with error handling"""
-        try:
-            returns_clean = returns.dropna(axis=1)
-            if returns_clean.empty or returns_clean.shape[1] < 2:
-                return np.array([])
-            
-            cov = returns_clean.cov().values
-            n = cov.shape[0]
-            
-            # Add small diagonal term for numerical stability
-            cov += np.eye(n) * 1e-8
-            
-            w = Variable(n)
-            risk_contrib = w @ cov @ w  # Use @ instead of * for matrix multiplication
-            
-            prob = Problem(
-                Minimize(sum_squares(risk_contrib - 1/n)),
-                [sum(w) == 1, w >= 0]
-            )
-            prob.solve(solver='ECOS', verbose=False)
-            
-            if prob.status == 'optimal':
-                weights = np.array(w.value).flatten()
-                # Ensure weights are valid and sum to 1
-                if np.any(weights < 0) or np.any(np.isnan(weights)):
-                    return np.ones(n) / n
-                return weights / weights.sum()  # Normalize
-            else:
-                # Equal weights fallback
-                return np.ones(n) / n
-                
-        except:
-            # Equal weights fallback
-            n = returns.shape[1]
-            return np.ones(n) / n
-
     def backtest(self):
-        """Main backtesting engine with error handling"""
+        """Main backtesting engine with enhanced stock selection"""
         if self.data.empty:
             print("No data available for backtesting")
             return pd.Series([INITIAL_CAPITAL])
@@ -527,34 +567,27 @@ class GrahamBacktester:
                 
                 if eligible.any():
                     eligible_tickers = eligible[eligible].index.tolist()
-                    print(f"  Eligible tickers: {len(eligible_tickers)}")
+                    print(f"  Initial eligible tickers: {len(eligible_tickers)}")
                     
-                    # Limit to maximum 20 stocks for better risk management
-                    if len(eligible_tickers) > 20:
-                        # Select top 20 by market cap
-                        market_caps = []
-                        for ticker in eligible_tickers:
-                            mc = self.fundamentals.get(ticker, {}).get('market_cap', 0)
-                            market_caps.append((ticker, mc))
-                        market_caps.sort(key=lambda x: x[1], reverse=True)
-                        eligible_tickers = [x[0] for x in market_caps[:20]]
-                        print(f"  Limited to top 20 by market cap: {len(eligible_tickers)}")
+                    # Enhanced selection process
+                    selected_tickers = self._select_diversified_portfolio(eligible_tickers, target_size=12)
+                    print(f"  Final selected tickers: {len(selected_tickers)}")
                     
-                    # Ensure eligible tickers exist in returns data
-                    available_eligible = [t for t in eligible_tickers if t in returns.columns]
-                    print(f"  Available eligible tickers: {len(available_eligible)}")
+                    # Ensure selected tickers exist in returns data
+                    available_selected = [t for t in selected_tickers if t in returns.columns]
+                    print(f"  Available selected tickers: {len(available_selected)}")
                     
-                    if len(available_eligible) > 0:
-                        # Get returns for available eligible tickers
-                        eligible_returns = returns.loc[:dt, available_eligible]
+                    if len(available_selected) > 0:
+                        # Get returns for selected tickers
+                        selected_returns = returns.loc[:dt, available_selected]
                         
                         # Remove tickers with insufficient data
-                        min_observations = min(60, len(eligible_returns) // 2)
-                        eligible_returns = eligible_returns.dropna(thresh=min_observations, axis=1)
+                        min_observations = min(60, len(selected_returns) // 2)
+                        selected_returns = selected_returns.dropna(thresh=min_observations, axis=1)
                         
-                        if not eligible_returns.empty and len(eligible_returns.columns) > 0:
+                        if not selected_returns.empty and len(selected_returns.columns) > 0:
                             # Use more recent data for weight calculation
-                            recent_returns = eligible_returns.tail(min(252, len(eligible_returns)))
+                            recent_returns = selected_returns.tail(min(252, len(selected_returns)))
                             recent_returns = recent_returns.dropna(axis=1)
                             
                             if not recent_returns.empty and len(recent_returns.columns) > 0:
@@ -564,6 +597,10 @@ class GrahamBacktester:
                                 if len(weights) > 0 and len(weights) == len(recent_returns.columns):
                                     current_weights = pd.Series(weights, index=recent_returns.columns)
                                     print(f"  Portfolio weights assigned to {len(current_weights)} stocks")
+                                    
+                                    # Show top holdings
+                                    top_holdings = current_weights.sort_values(ascending=False).head(5)
+                                    print(f"  Top 5 holdings: {dict(top_holdings.round(3))}")
                                 else:
                                     # Equal weights fallback
                                     current_weights = pd.Series(
@@ -576,10 +613,10 @@ class GrahamBacktester:
                                 print("  No valid recent returns data")
                         else:
                             current_weights = None
-                            print("  No valid returns data for eligible stocks")
+                            print("  No valid returns data for selected stocks")
                     else:
                         current_weights = None
-                        print("  No available eligible tickers in returns data")
+                        print("  No available selected tickers in returns data")
                 else:
                     current_weights = None
                     print("  No eligible stocks found")
@@ -709,6 +746,135 @@ class GrahamBacktester:
         plt.show()
         
         return f"Sharpe: {sharpe:.2f}, Max DD: {max_dd:.2%}, Ann. Return: {annualized_return:.2%}"
+
+    def _preprocess_data(self):
+        """Clean and normalize data with available information"""
+        if self.data.empty:
+            print("No data available for preprocessing")
+            return
+        
+        print(f"Data preprocessing started...")
+        print(f"Data shape: {self.data.shape}")
+        
+        # Get current fundamentals for screening (only for tickers that have price data)
+        if hasattr(self, 'successful_tickers'):
+            available_tickers = self.successful_tickers
+        elif isinstance(self.data.columns, pd.MultiIndex):
+            available_tickers = self.data.columns.get_level_values(0).unique().tolist()
+        else:
+            available_tickers = self.sp500
+        
+        print(f"Getting fundamental data for {len(available_tickers)} tickers...")
+        self.fundamentals = {}
+        
+        # Process in batches to avoid overwhelming the API
+        batch_size = 10
+        for i in range(0, len(available_tickers), batch_size):
+            batch = available_tickers[i:i+batch_size]
+            print(f"  Processing fundamental data batch {i//batch_size + 1}/{(len(available_tickers)-1)//batch_size + 1}")
+            
+            for ticker in batch:
+                self.fundamentals[ticker] = self._get_ticker_info(ticker)
+            
+            # Add delay between batches
+            time.sleep(0.5)
+        
+        print("Fundamental data collection completed")
+        
+        # Try to extract Close and Volume data with error handling
+        try:
+            # Check if we have the expected MultiIndex structure
+            if isinstance(self.data.columns, pd.MultiIndex):
+                # Try to get Close data
+                closes = None
+                volumes = None
+                
+                # Look for Close data in different possible locations
+                if 'Close' in self.data.columns.get_level_values(1):
+                    closes = self.data.xs('Close', axis=1, level=1)
+                elif 'Adj Close' in self.data.columns.get_level_values(1):
+                    closes = self.data.xs('Adj Close', axis=1, level=1)
+                
+                # Look for Volume data
+                if 'Volume' in self.data.columns.get_level_values(1):
+                    volumes = self.data.xs('Volume', axis=1, level=1)
+                
+                if closes is not None:
+                    # Remove tickers with all NaN values
+                    closes = closes.dropna(axis=1, how='all')
+                    print(f"Close prices available for {len(closes.columns)} tickers")
+                    
+                    self.closes = closes
+                    if volumes is not None:
+                        volumes = volumes.dropna(axis=1, how='all')
+                        # Align volumes with closes
+                        common_tickers = closes.columns.intersection(volumes.columns)
+                        if len(common_tickers) > 0:
+                            self.market_cap_proxy = closes[common_tickers] * volumes[common_tickers].rolling(252).mean()
+                        else:
+                            self.market_cap_proxy = closes  # Just use price as proxy
+                    else:
+                        self.market_cap_proxy = closes  # Just use price as proxy
+                else:
+                    print("Could not find Close price data")
+                    self.closes = pd.DataFrame()
+                    self.market_cap_proxy = pd.DataFrame()
+            else:
+                # Single level columns
+                if 'Close' in self.data.columns:
+                    self.closes = self.data[['Close']].copy()
+                    if 'Volume' in self.data.columns:
+                        self.market_cap_proxy = self.data['Close'] * self.data['Volume'].rolling(252).mean()
+                    else:
+                        self.market_cap_proxy = self.data['Close']
+                else:
+                    print("Could not find Close price data in single-level columns")
+                    self.closes = pd.DataFrame()
+                    self.market_cap_proxy = pd.DataFrame()
+                    
+        except Exception as e:
+            print(f"Error in data preprocessing: {e}")
+            self.closes = pd.DataFrame()
+            self.market_cap_proxy = pd.DataFrame()
+        
+        print(f"Data preprocessing completed. Final close prices shape: {self.closes.shape}")
+
+    def _risk_parity_weights(self, returns):
+        """Risk parity portfolio optimization with error handling"""
+        try:
+            returns_clean = returns.dropna(axis=1)
+            if returns_clean.empty or returns_clean.shape[1] < 2:
+                return np.array([])
+            
+            cov = returns_clean.cov().values
+            n = cov.shape[0]
+            
+            # Add small diagonal term for numerical stability
+            cov += np.eye(n) * 1e-8
+            
+            w = Variable(n)
+            risk_contrib = w @ cov @ w  # Use @ instead of * for matrix multiplication
+            
+            prob = Problem(
+                Minimize(sum_squares(risk_contrib - 1/n)),
+                [sum(w) == 1, w >= 0]
+            )
+            prob.solve(solver='ECOS', verbose=False)
+            
+            if prob.status == 'optimal':
+                weights = np.array(w.value).flatten()
+                # Ensure weights are valid and sum to 1
+                if np.any(weights < 0) or np.any(np.isnan(weights)):
+                    return np.ones(n) / n
+                return weights / weights.sum()  # Normalize
+            else:
+                # Equal weights fallback
+                return np.ones(n) / n
+                
+        except:
+            # Equal weights fallback
+            n = returns.shape[1]
+            return np.ones(n) / n
 
 if __name__ == "__main__":
     backtester = GrahamBacktester()
