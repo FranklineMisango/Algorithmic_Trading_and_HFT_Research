@@ -583,8 +583,8 @@ class EsterStrategy:
 
 if __name__ == "__main__":
     # Use simpler parameters for testing
-    tickers = ["NVDA", "AAPL"]
-    start_date = "2019-01-01"
+    tickers = ["AAPL", "MSFT"]
+    start_date = "2023-01-01"
     end_date = "2024-12-31"
     
     try:
