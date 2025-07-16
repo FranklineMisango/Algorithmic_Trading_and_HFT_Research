@@ -99,10 +99,12 @@ class GrahamBacktester:
                 chunk_num = i//chunk_size + 1
                 total_chunks = (len(self.sp500)-1)//chunk_size + 1
                 
-                print(f"Fetching chunk {chunk_num}/{total_chunks}: {len(chunk)} tickers")
+                print(f"Fetching chunk {chunk_num}/{total_chunks}: {len(chunk)} tickers (Running total: {len(successful_tickers)})")
                 
                 # Retry mechanism for each chunk
                 max_retries = 3
+                chunk_successful = False
+                
                 for attempt in range(max_retries):
                     try:
                         # Add delay between requests
@@ -124,33 +126,44 @@ class GrahamBacktester:
                         if not chunk_data.empty:
                             all_data.append(chunk_data)
                             successful_tickers.extend(chunk)
-                            print(f"  Successfully fetched {len(chunk)} tickers")
+                            chunk_successful = True
+                            print(f"  ✓ Successfully fetched {len(chunk)} tickers (Total so far: {len(successful_tickers)})")
                             break
                         else:
-                            print(f"  No data returned for chunk {chunk_num}")
+                            print(f"  ✗ No data returned for chunk {chunk_num}")
                             
                     except Exception as e:
-                        print(f"  Attempt {attempt + 1} failed for chunk {chunk_num}: {str(e)[:100]}...")
+                        print(f"  ✗ Attempt {attempt + 1} failed for chunk {chunk_num}: {str(e)[:80]}...")
                         if attempt == max_retries - 1:
                             failed_tickers.extend(chunk)
-                            print(f"  Failed to fetch chunk {chunk_num} after {max_retries} attempts")
+                            print(f"  ✗ Failed to fetch chunk {chunk_num} after {max_retries} attempts")
+                
+                if not chunk_successful:
+                    print(f"  ✗ Chunk {chunk_num} completely failed - added {len(chunk)} tickers to failed list")
                 
                 # Add delay between chunks
                 time.sleep(1)
+                
+                # Progress update every 5 chunks
+                if chunk_num % 5 == 0:
+                    print(f"  Progress: {chunk_num}/{total_chunks} chunks completed, {len(successful_tickers)} tickers successful, {len(failed_tickers)} failed")
             
-            print(f"\nData fetching summary:")
-            print(f"  Successfully fetched: {len(successful_tickers)} tickers")
-            print(f"  Failed to fetch: {len(failed_tickers)} tickers")
+            print(f"\n=== DATA FETCHING SUMMARY ===")
+            print(f"Total S&P 500 tickers attempted: {len(self.sp500)}")
+            print(f"Successfully fetched: {len(successful_tickers)} tickers ({len(successful_tickers)/len(self.sp500)*100:.1f}%)")
+            print(f"Failed to fetch: {len(failed_tickers)} tickers ({len(failed_tickers)/len(self.sp500)*100:.1f}%)")
             
             if failed_tickers:
-                print(f"  Failed tickers (first 20): {failed_tickers[:20]}")
+                print(f"Failed tickers (first 20): {failed_tickers[:20]}")
+                if len(failed_tickers) > 20:
+                    print(f"... and {len(failed_tickers) - 20} more")
             
             if not all_data:
                 print("No data fetched successfully")
                 return pd.DataFrame()
             
             # Combine all chunks
-            print("Combining data chunks...")
+            print(f"\nCombining {len(all_data)} data chunks...")
             data = pd.concat(all_data, axis=1)
             print(f"Combined data shape: {data.shape}")
             
@@ -175,7 +188,7 @@ class GrahamBacktester:
             # Check data availability and quality
             if isinstance(data.columns, pd.MultiIndex):
                 available_tickers = data.columns.get_level_values(0).unique()
-                print(f"Data available for {len(available_tickers)} tickers")
+                print(f"Final result: Data available for {len(available_tickers)} unique tickers")
                 
                 # Check data quality
                 if 'Close' in data.columns.get_level_values(1):
@@ -185,6 +198,8 @@ class GrahamBacktester:
                     print(f"  Average data points per ticker: {data_quality.mean():.0f}")
                     print(f"  Min data points: {data_quality.min()}")
                     print(f"  Max data points: {data_quality.max()}")
+                    print(f"  Tickers with >1000 data points: {(data_quality > 1000).sum()}")
+                    print(f"  Tickers with >5000 data points: {(data_quality > 5000).sum()}")
                     
                     # Filter out tickers with insufficient data
                     min_data_points = 252  # At least 1 year of data
@@ -208,6 +223,7 @@ class GrahamBacktester:
                     
                     # Update successful tickers list to only include those with good data
                     self.successful_tickers = good_tickers.tolist()
+                    print(f"Final tickers for analysis: {len(self.successful_tickers)}")
                 else:
                     print("  No Close price data found")
                     return pd.DataFrame()
@@ -215,7 +231,7 @@ class GrahamBacktester:
                 print("  Data structure is not MultiIndex as expected")
                 return pd.DataFrame()
             
-            print(f"Final data processing completed")
+            print(f"Final data processing completed successfully")
             return data
             
         except Exception as e:
@@ -513,16 +529,16 @@ class GrahamBacktester:
                     eligible_tickers = eligible[eligible].index.tolist()
                     print(f"  Eligible tickers: {len(eligible_tickers)}")
                     
-                    # Limit to maximum 30 stocks for better diversification with full universe
-                    if len(eligible_tickers) > 30:
-                        # Select top 30 by market cap
+                    # Limit to maximum 20 stocks for better risk management
+                    if len(eligible_tickers) > 20:
+                        # Select top 20 by market cap
                         market_caps = []
                         for ticker in eligible_tickers:
                             mc = self.fundamentals.get(ticker, {}).get('market_cap', 0)
                             market_caps.append((ticker, mc))
                         market_caps.sort(key=lambda x: x[1], reverse=True)
-                        eligible_tickers = [x[0] for x in market_caps[:30]]
-                        print(f"  Limited to top 30 by market cap: {len(eligible_tickers)}")
+                        eligible_tickers = [x[0] for x in market_caps[:20]]
+                        print(f"  Limited to top 20 by market cap: {len(eligible_tickers)}")
                     
                     # Ensure eligible tickers exist in returns data
                     available_eligible = [t for t in eligible_tickers if t in returns.columns]
@@ -579,8 +595,8 @@ class GrahamBacktester:
                     weights_aligned = weights_aligned / weights_aligned.sum()
                     port_return = (daily_returns * weights_aligned).sum()
                     
-                    # Add some realism - cap daily returns at +/- 10%
-                    port_return = max(-0.10, min(0.10, port_return))
+                    # Add more conservative realism - cap daily returns at +/- 5%
+                    port_return = max(-0.05, min(0.05, port_return))
                     
                     portfolio.iloc[i] = portfolio.iloc[i-1] * (1 + port_return)
                 else:
@@ -606,7 +622,8 @@ class GrahamBacktester:
         
         # Calculate performance metrics
         total_return = (portfolio.iloc[-1] / portfolio.iloc[0]) - 1
-        annualized_return = (1 + total_return) ** (252 / len(portfolio)) - 1
+        years = len(portfolio) / 252
+        annualized_return = (1 + total_return) ** (1/years) - 1
         sharpe = np.sqrt(252) * returns.mean() / returns.std() if returns.std() > 0 else 0
         max_dd = (portfolio / portfolio.cummax() - 1).min()
         
@@ -617,44 +634,81 @@ class GrahamBacktester:
         
         # Fetch S&P 500 for comparison
         try:
-            spy_data = yf.download('SPY', start=START_DATE, end=END_DATE)
-            if isinstance(spy_data, pd.DataFrame) and 'Close' in spy_data.columns:
-                spy = spy_data['Close']
+            spy_data = yf.download('SPY', start=START_DATE, end=END_DATE, auto_adjust=True)
+            
+            # Handle different data structures returned by yfinance
+            if isinstance(spy_data, pd.DataFrame):
+                if 'Close' in spy_data.columns:
+                    spy = spy_data['Close']
+                elif len(spy_data.columns) == 1:
+                    spy = spy_data.iloc[:, 0]
+                else:
+                    spy = spy_data['Adj Close'] if 'Adj Close' in spy_data.columns else spy_data.iloc[:, 0]
             else:
                 spy = spy_data
             
-            spy_returns = spy.pct_change().dropna()
-            spy_total_return = (spy.iloc[-1] / spy.iloc[0]) - 1
-            spy_annualized_return = (1 + spy_total_return) ** (252 / len(spy)) - 1
-            spy_sharpe = np.sqrt(252) * spy_returns.mean() / spy_returns.std() if spy_returns.std() > 0 else 0
-            spy_max_dd = (spy / spy.cummax() - 1).min()
-            
-            print(f"\nS&P 500 Comparison:")
-            print(f"SPY Total Return: {spy_total_return:.2%}")
-            print(f"SPY Annualized Return: {spy_annualized_return:.2%}")
-            print(f"SPY Sharpe Ratio: {spy_sharpe:.2f}")
-            print(f"SPY Max Drawdown: {spy_max_dd:.2%}")
-            
+            # Ensure we have valid data
+            if len(spy) > 0:
+                spy_returns = spy.pct_change().dropna()
+                spy_total_return = (spy.iloc[-1] / spy.iloc[0]) - 1
+                spy_years = len(spy) / 252
+                spy_annualized_return = (1 + spy_total_return) ** (1/spy_years) - 1
+                spy_sharpe = np.sqrt(252) * spy_returns.mean() / spy_returns.std() if spy_returns.std() > 0 else 0
+                spy_max_dd = (spy / spy.cummax() - 1).min()
+                
+                print(f"\nS&P 500 Comparison:")
+                print(f"SPY Total Return: {spy_total_return:.2%}")
+                print(f"SPY Annualized Return: {spy_annualized_return:.2%}")
+                print(f"SPY Sharpe Ratio: {spy_sharpe:.2f}")
+                print(f"SPY Max Drawdown: {spy_max_dd:.2%}")
+                
+                # Calculate alpha and beta
+                portfolio_returns = portfolio.pct_change().dropna()
+                common_dates = portfolio_returns.index.intersection(spy_returns.index)
+                if len(common_dates) > 252:  # At least 1 year of common data
+                    port_ret_common = portfolio_returns.loc[common_dates]
+                    spy_ret_common = spy_returns.loc[common_dates]
+                    
+                    # Calculate beta
+                    covariance = np.cov(port_ret_common, spy_ret_common)[0, 1]
+                    spy_variance = np.var(spy_ret_common)
+                    beta = covariance / spy_variance if spy_variance > 0 else 0
+                    
+                    # Calculate alpha (annualized)
+                    alpha = (annualized_return - spy_annualized_return * beta) * 100
+                    
+                    print(f"Alpha: {alpha:.2f}%")
+                    print(f"Beta: {beta:.2f}")
+                
+            else:
+                print("No valid SPY data found")
+                spy = pd.Series()
+                
         except Exception as e:
             print(f"Error fetching SPY data: {e}")
             spy = pd.Series()
         
         # Plotting
-        plt.figure(figsize=(12, 6))
-        (portfolio / portfolio.iloc[0]).plot(label='Graham Strategy', linewidth=2)
+        plt.figure(figsize=(12, 8))
         
-        if not spy.empty:
+        # Normalize both series to start at 1
+        portfolio_norm = portfolio / portfolio.iloc[0]
+        portfolio_norm.plot(label='Graham Strategy', linewidth=2, color='blue')
+        
+        if len(spy) > 0:
             spy_norm = spy / spy.iloc[0]
-            spy_norm.plot(label='S&P 500 (SPY)', linewidth=2)
+            spy_norm.plot(label='S&P 500 (SPY)', linewidth=2, color='red', alpha=0.7)
         
-        plt.title(f"Performance Comparison\nGraham Sharpe: {sharpe:.2f} | Max DD: {max_dd:.2%}")
-        plt.ylabel('Normalized Value')
+        plt.title(f"Benjamin Graham Defensive Strategy Performance\nSharpe: {sharpe:.2f} | Max DD: {max_dd:.2%} | Ann. Return: {annualized_return:.2%}")
+        plt.ylabel('Normalized Value (Starting at 1.0)')
         plt.xlabel('Date')
         plt.legend()
         plt.grid(True, alpha=0.3)
+        plt.yscale('log')  # Use log scale for better visualization of long-term returns
+        plt.tight_layout()
         plt.show()
         
-        return f"Sharpe Ratio: {sharpe:.2f}, Max Drawdown: {max_dd:.2%}, Total Return: {total_return:.2%}"
+        return f"Sharpe: {sharpe:.2f}, Max DD: {max_dd:.2%}, Ann. Return: {annualized_return:.2%}"
 
 if __name__ == "__main__":
     backtester = GrahamBacktester()
