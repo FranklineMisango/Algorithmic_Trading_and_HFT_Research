@@ -18,3 +18,4 @@ jupyterlab
 nbconvert
 pandas_datareader
 cvxpy
+pandas

@@ -21,7 +21,6 @@ def fetch_inflation_data():
     """Fetch and preprocess CPI data from FRED"""
     try:
         cpi = web.DataReader(CPI_SERIES, 'fred', START_DATE, END_DATE)
-        # Calculate inflation rate instead of using X13
         cpi_clean = cpi[CPI_SERIES].dropna()
         inflation_rate = cpi_clean.pct_change(12).fillna(0)  # Year-over-year inflation
         return cpi_clean
@@ -62,7 +61,6 @@ class GrahamBacktester:
             return constituents  # Use all constituents instead of limiting to 50
         except Exception as e:
             print(f"Error fetching S&P 500 constituents: {e}")
-            # Return a larger set of well-known stocks as fallback
             return [
                 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM', 'V', 'JNJ',
                 'UNH', 'HD', 'PG', 'MA', 'BAC', 'ABBV', 'PFE', 'KO', 'AVGO', 'PEP',
@@ -581,13 +579,14 @@ class GrahamBacktester:
                         # Get returns for selected tickers
                         selected_returns = returns.loc[:dt, available_selected]
                         
-                        # Remove tickers with insufficient data
-                        min_observations = min(60, len(selected_returns) // 2)
+                        # Remove tickers with insufficient data - be more lenient for early dates
+                        min_observations = max(30, min(60, len(selected_returns) // 4))  # Reduced requirements
                         selected_returns = selected_returns.dropna(thresh=min_observations, axis=1)
                         
                         if not selected_returns.empty and len(selected_returns.columns) > 0:
-                            # Use more recent data for weight calculation
-                            recent_returns = selected_returns.tail(min(252, len(selected_returns)))
+                            # Use more recent data for weight calculation - be more lenient
+                            lookback_days = min(126, len(selected_returns))  # Use at least 6 months, up to 126 days
+                            recent_returns = selected_returns.tail(lookback_days)
                             recent_returns = recent_returns.dropna(axis=1)
                             
                             if not recent_returns.empty and len(recent_returns.columns) > 0:
@@ -671,59 +670,66 @@ class GrahamBacktester:
         
         # Fetch S&P 500 for comparison
         try:
-            spy_data = yf.download('SPY', start=START_DATE, end=END_DATE, auto_adjust=True)
+            spy_data = yf.download('SPY', start=START_DATE, end=END_DATE)
             
             # Handle different data structures returned by yfinance
-            if isinstance(spy_data, pd.DataFrame):
-                if 'Close' in spy_data.columns:
+            if isinstance(spy_data, pd.DataFrame) and not spy_data.empty:
+                if 'Adj Close' in spy_data.columns:
+                    spy = spy_data['Adj Close']
+                elif 'Close' in spy_data.columns:
                     spy = spy_data['Close']
-                elif len(spy_data.columns) == 1:
-                    spy = spy_data.iloc[:, 0]
                 else:
-                    spy = spy_data['Adj Close'] if 'Adj Close' in spy_data.columns else spy_data.iloc[:, 0]
-            else:
+                    spy = spy_data.iloc[:, 0] if len(spy_data.columns) > 0 else pd.Series()
+            elif hasattr(spy_data, 'values'):  # Series
                 spy = spy_data
+            else:
+                spy = pd.Series()
             
             # Ensure we have valid data
-            if len(spy) > 0:
-                spy_returns = spy.pct_change().dropna()
-                spy_total_return = (spy.iloc[-1] / spy.iloc[0]) - 1
-                spy_years = len(spy) / 252
-                spy_annualized_return = (1 + spy_total_return) ** (1/spy_years) - 1
-                spy_sharpe = np.sqrt(252) * spy_returns.mean() / spy_returns.std() if spy_returns.std() > 0 else 0
-                spy_max_dd = (spy / spy.cummax() - 1).min()
-                
-                print(f"\nS&P 500 Comparison:")
-                print(f"SPY Total Return: {spy_total_return:.2%}")
-                print(f"SPY Annualized Return: {spy_annualized_return:.2%}")
-                print(f"SPY Sharpe Ratio: {spy_sharpe:.2f}")
-                print(f"SPY Max Drawdown: {spy_max_dd:.2%}")
-                
-                # Calculate alpha and beta
-                portfolio_returns = portfolio.pct_change().dropna()
-                common_dates = portfolio_returns.index.intersection(spy_returns.index)
-                if len(common_dates) > 252:  # At least 1 year of common data
-                    port_ret_common = portfolio_returns.loc[common_dates]
-                    spy_ret_common = spy_returns.loc[common_dates]
+            if not spy.empty and not spy.isna().all():
+                spy = spy.dropna()  # Remove any NaN values
+                if not spy.empty:
+                    spy_returns = spy.pct_change().dropna()
+                    spy_total_return = (spy.iloc[-1] / spy.iloc[0]) - 1
+                    spy_years = len(spy) / 252
+                    spy_annualized_return = (1 + spy_total_return) ** (1/spy_years) - 1 if spy_years > 0 else 0
+                    spy_sharpe = np.sqrt(252) * spy_returns.mean() / spy_returns.std() if not spy_returns.empty and spy_returns.std() > 0 else 0
+                    spy_max_dd = (spy / spy.cummax() - 1).min() if len(spy) > 1 else 0
                     
-                    # Calculate beta
-                    covariance = np.cov(port_ret_common, spy_ret_common)[0, 1]
-                    spy_variance = np.var(spy_ret_common)
-                    beta = covariance / spy_variance if spy_variance > 0 else 0
+                    print(f"\nS&P 500 Comparison:")
+                    print(f"SPY Total Return: {spy_total_return:.2%}")
+                    print(f"SPY Annualized Return: {spy_annualized_return:.2%}")
+                    print(f"SPY Sharpe Ratio: {spy_sharpe:.2f}")
+                    print(f"SPY Max Drawdown: {spy_max_dd:.2%}")
                     
-                    # Calculate alpha (annualized)
-                    alpha = (annualized_return - spy_annualized_return * beta) * 100
+                    # Calculate alpha and beta
+                    portfolio_returns = portfolio.pct_change().dropna()
+                    common_dates = portfolio_returns.index.intersection(spy_returns.index)
+                    if len(common_dates) > 252:  # At least 1 year of common data
+                        port_ret_common = portfolio_returns.loc[common_dates]
+                        spy_ret_common = spy_returns.loc[common_dates]
+                        
+                        # Calculate beta
+                        covariance = np.cov(port_ret_common, spy_ret_common)[0, 1]
+                        spy_variance = np.var(spy_ret_common)
+                        beta = covariance / spy_variance if spy_variance > 0 else 0
+                        
+                        # Calculate alpha (annualized)
+                        alpha = (annualized_return - spy_annualized_return * beta) * 100
+                        
+                        print(f"Alpha: {alpha:.2f}%")
+                        print(f"Beta: {beta:.2f}")
                     
-                    print(f"Alpha: {alpha:.2f}%")
-                    print(f"Beta: {beta:.2f}")
-                
+                    spy_valid = True
+                else:
+                    spy_valid = False
             else:
-                print("No valid SPY data found")
-                spy = pd.Series()
+                spy_valid = False
                 
         except Exception as e:
             print(f"Error fetching SPY data: {e}")
             spy = pd.Series()
+            spy_valid = False
         
         # Plotting
         plt.figure(figsize=(12, 8))
@@ -732,7 +738,7 @@ class GrahamBacktester:
         portfolio_norm = portfolio / portfolio.iloc[0]
         portfolio_norm.plot(label='Graham Strategy', linewidth=2, color='blue')
         
-        if len(spy) > 0:
+        if spy_valid and len(spy) > 0:
             spy_norm = spy / spy.iloc[0]
             spy_norm.plot(label='S&P 500 (SPY)', linewidth=2, color='red', alpha=0.7)
         
