@@ -19,3 +19,5 @@ nbconvert
 pandas_datareader
 cvxpy
 pandas
+xgboost
+tensorflow
