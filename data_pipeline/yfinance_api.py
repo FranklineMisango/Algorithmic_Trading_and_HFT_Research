@@ -7,6 +7,23 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+"""
+Yahoo Finance API Service
+
+Required Environment Variables:
+- ALPACA_API_KEY: Your Alpaca API key
+- ALPACA_SECRET_KEY: Your Alpaca secret key
+- ALPACA_BASE_URL: Alpaca API base URL (optional, defaults to paper trading)
+- GOOGLE_SEARCH_API_KEY: Google Custom Search API key
+- GOOGLE_SEARCH_ENGINE_ID: Google Custom Search Engine ID
+
+To set environment variables:
+export ALPACA_API_KEY="your_key_here"
+export ALPACA_SECRET_KEY="your_secret_here"
+export GOOGLE_SEARCH_API_KEY="your_google_key_here"
+export GOOGLE_SEARCH_ENGINE_ID="your_engine_id_here"
+"""
+
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -134,14 +151,17 @@ def get_fundamentals():
 def get_alpaca_data(ticker):
     """Get data from Alpaca API"""
     try:
-        # Use Alpaca API credentials from environment/config
+        # Use Alpaca API credentials from environment variables
         import os
-        
-        # These should match the appsettings.json configuration
-        api_key = "PK89MS3NBHE4VI1LU4C5"
-        secret_key = "ehTvuMIqirTLJinOc4i6cjf68kcY1hQcResf5Jbh"
-        base_url = "https://paper-api.alpaca.markets"
-        
+
+        api_key = os.getenv('ALPACA_API_KEY')
+        secret_key = os.getenv('ALPACA_SECRET_KEY')
+        base_url = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+
+        if not api_key or not secret_key:
+            app.logger.warning(f"Alpaca API credentials not found in environment variables for {ticker}")
+            return None
+
         headers = {
             'APCA-API-KEY-ID': api_key,
             'APCA-API-SECRET-KEY': secret_key,
@@ -294,9 +314,13 @@ def parse_finviz_value(value_text):
 def get_google_search_data(ticker):
     """Get financial data using Google Search API"""
     try:
-        # Use Google Search API credentials from appsettings.json
-        api_key = "AIzaSyDYJVpcewQUGMGkQkp96I7X8cPjAuzSRV0"
-        search_engine_id = "81db24ee2e0554e76"
+        # Use Google Search API credentials from environment variables
+        api_key = os.getenv('GOOGLE_SEARCH_API_KEY')
+        search_engine_id = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
+
+        if not api_key or not search_engine_id:
+            app.logger.warning(f"Google Search API credentials not found in environment variables for {ticker}")
+            return None
         
         # Search for financial data
         search_query = f"{ticker} stock financial data market cap P/E ratio"
