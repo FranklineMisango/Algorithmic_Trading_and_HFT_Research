@@ -1,5 +1,5 @@
 numpy
-tensorflow[and-cuda]  
+tensorflow[and-cuda]
 pandas
 scipy
 statsmodels
@@ -19,6 +19,5 @@ jupyterlab
 nbconvert
 pandas_datareader
 cvxpy
-pandas
+python-binance
 xgboost
-tensorflow
