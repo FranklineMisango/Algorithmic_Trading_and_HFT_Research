@@ -1,0 +1,11 @@
+alpaca-trade-api
+python-binance
+pandas
+numpy
+requests
+yfinance
+python-dateutil
+pytz
+tqdm
+polygon-api-client
+databento
