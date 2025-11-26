@@ -14,7 +14,6 @@ SYMBOL = 'btcusdt'
 DEPTH_LEVELS = 20
 UPDATE_SPEED = 100  # ms
 DATA_FILE = 'live_order_book_data.csv'
-MAX_ROWS = 100000  # Keep only recent data to avoid file growing too large
 
 ws_url = f'wss://fstream.binance.com/ws/{SYMBOL}@depth{DEPTH_LEVELS}@{UPDATE_SPEED}ms'
 
@@ -70,7 +69,7 @@ def start_websocket():
                                 on_error=on_error,
                                 on_close=on_close,
                                 on_open=on_open)
-    ws.run_forever()
+    ws.run_forever(ping_interval=30, ping_timeout=10)
 
 def save_data_periodically():
     global order_book_data, running
@@ -95,9 +94,6 @@ def save_data_periodically():
                 if os.path.exists(DATA_FILE):
                     existing_df = pd.read_csv(DATA_FILE)
                     combined_df = pd.concat([existing_df, df], ignore_index=True)
-                    # Keep only recent MAX_ROWS
-                    if len(combined_df) > MAX_ROWS:
-                        combined_df = combined_df.tail(MAX_ROWS)
                     combined_df.to_csv(DATA_FILE, index=False)
                 else:
                     df.to_csv(DATA_FILE, index=False)
