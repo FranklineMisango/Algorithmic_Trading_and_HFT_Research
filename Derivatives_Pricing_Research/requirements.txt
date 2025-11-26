@@ -1,0 +1,12 @@
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+plotly
+jupyter
+ipykernel
+streamlit
+quantlib
+yfinance
+openpyxl
