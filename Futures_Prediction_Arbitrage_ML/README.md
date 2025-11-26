@@ -4,13 +4,30 @@
 
 This project implements a machine learning pipeline for predicting short-term price movements in cryptocurrency futures (e.g., BTC/USDT) using real-time order book data from Binance. The goal is to develop a predictive model that can inform high-frequency trading (HFT) strategies by forecasting whether the mid-price will increase or decrease in the next time step.
 
-The notebook (`ml_orderbook_prediction.ipynb`) demonstrates the end-to-end process: data collection via WebSocket, feature engineering, model training with multiple algorithms, and backtesting a simple trading strategy.
+The notebook (`ml_orderbook_prediction.ipynb`) demonstrates the end-to-end process: data loading from background fetcher, feature engineering, model training with multiple algorithms, and backtesting a simple trading strategy.
+
+## Setup and Usage
+
+### Background Data Fetcher
+To collect real-time order book data continuously:
+
+1. Install dependencies: `pip install websocket-client pandas numpy`
+2. Run the background fetcher: `python data_fetcher.py`
+   - This starts a WebSocket connection and saves data to `live_order_book_data.csv` every minute.
+   - Press Ctrl+C to stop.
+3. The fetcher runs in the background, allowing the notebook to load fresh data without blocking.
+
+### Running the Notebook
+- **Option 1: Manual Start**: Run `python data_fetcher.py &` in terminal to start background data collection
+- **Option 2: From Notebook**: Use cell 2.5 in the notebook to start the fetcher programmatically
+- The notebook loads data from `live_order_book_data.csv` created by the background fetcher
+- If no live data, it falls back to historical fetches
 
 ## Methodology
 
 ### Data Collection
-- **Real-Time Data**: WebSocket connection to Binance Futures API streams order book updates (20 depth levels, 50ms intervals).
-- **Historical Data**: CCXT library fetches additional snapshots for backtesting.
+- **Real-Time Data**: Background script (`data_fetcher.py`) uses WebSocket to stream order book updates (20 depth levels, 50ms intervals) and saves to CSV.
+- **Historical Data**: CCXT library fetches additional snapshots for backtesting (used as fallback).
 - **Data Processing**: Parses bids/asks into structured DataFrames with timestamps.
 
 ### Feature Engineering
