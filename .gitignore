@@ -19,3 +19,7 @@
 *.swp
 *.swo
 *.csv
+
+/.qodo/
+/data/
+*.pyc
