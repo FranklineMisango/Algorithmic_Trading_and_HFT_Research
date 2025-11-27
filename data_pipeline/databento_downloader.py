@@ -17,14 +17,14 @@ try:
 except ImportError:
     raise ImportError("Please install databento: pip install databento")
 
-from .config import (
+from config import (
     DATA_BENTO_API_KEY,
     DATA_BENTO_USER_ID,
     DATA_BENTO_PROD_NAME,
     DATA_ROOT,
     LEAN_PRICE_MULTIPLIER,
 )
-from .utils import ensure_directory_exists, setup_logging
+from utils import ensure_directory_exists, setup_logging
 
 
 class DatabentoFuturesDownloader:

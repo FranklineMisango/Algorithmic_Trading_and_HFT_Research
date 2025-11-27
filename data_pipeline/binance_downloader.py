@@ -123,7 +123,7 @@ class BinanceDataDownloader:
             
             while current_date <= end_date:
                 date_start = current_date.replace(hour=0, minute=0, second=0)
-                date_end = current_date.replace(hour=23, minute=59, second=59)
+                date_end = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0)
                 
                 data = self.get_klines(symbol, resolution, date_start, date_end)
                 
