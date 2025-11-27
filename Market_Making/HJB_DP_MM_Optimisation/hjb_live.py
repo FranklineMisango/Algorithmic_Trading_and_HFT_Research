@@ -45,18 +45,21 @@ try:
     # Set explicit architecture target
     config.CUDA_TARGET_COMPUTE_CAPABILITY = (8, 2)
     
-    # Test if CUDA is working properly
+    # Test if CUDA is working properly with proper context management
     @cuda.jit
     def test_kernel(x):
         i = cuda.grid(1)
         if i < x.shape[0]:
-            x[i] *= 2
+            x[i] *= 2.0
     
-    # Try to execute a simple kernel
+    # Try to execute a simple kernel with proper error handling
     test_array = np.ones(1, dtype=np.float32)
     d_test = cuda.to_device(test_array)
     test_kernel[1, 1](d_test)
     cuda.synchronize()
+    
+    # Clean up CUDA context to avoid conflicts
+    cuda.close()
     
     print("CUDA initialization successful!")
     
