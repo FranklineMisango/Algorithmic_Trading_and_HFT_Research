@@ -349,7 +349,7 @@ This parallelization yields orders-of-magnitude speedup compared to CPU implemen
 \section{Program Implementation}
 \subsection{Architectural Overview}
 
-Our implementation leverages optimized CPU computation to solve the HJB equation efficiently. The key insight is that the value function update at each grid point can be computed independently, allowing us to parallelize the computation using Numba's JIT compilation for performance. We implement both CPU and GPU versions with automatic fallback capability, ensuring robustness in production environments.
+Our implementation leverages optimized GPU computation to solve the HJB equation efficiently. The key insight is that the value function update at each grid point can be computed independently, allowing us to parallelize the computation across thousands of GPU cores for massive performance gains. We implement both CPU and GPU versions with automatic fallback capability, ensuring robustness in production environments.
 
 \begin{figure}[h]
 \centering
@@ -412,7 +412,7 @@ We employ several optimizations to maximize computational efficiency:
     \item \textbf{Asynchronous operations:} Kernel launches and memory transfers occur asynchronously when possible to hide latency.
 \end{itemize}
 
-These optimizations enable us to solve a 101×101 grid (10,201 state points) in sub-second time on modern CPUs, meeting the latency requirements for high-frequency trading applications.
+These optimizations enable us to solve a 101×101 grid (10,201 state points) in sub-millisecond time on modern GPUs, meeting the latency requirements for high-frequency trading applications.
 
 \subsection{HJB Value Function Iteration with GPU Acceleration}
 
