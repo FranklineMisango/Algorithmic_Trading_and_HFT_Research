@@ -16,31 +16,41 @@ def check_cuda():
         # Attempt to import CUDA-enabled packages
         import numba
         from numba import cuda
-        import cupy as cp
+        
+        try:
+            import cupy as cp
+            HAS_CUPY = True
+        except ImportError:
+            print("⚠️ CuPy not available - GPU acceleration limited")
+            HAS_CUPY = False
         
         # Test CUDA functionality
-        @cuda.jit
-        def test_kernel(x):
-            i = cuda.grid(1)
-            if i < x.shape[0]:
-                x[i] *= 2
-                
-        # Simple array test
-        import numpy as np
-        test_array = np.ones(10, dtype=np.float32)
-        d_test = cuda.to_device(test_array)
-        test_kernel[1, 10](d_test)
-        result = d_test.copy_to_host()
-        
-        if np.all(result == 2.0):
-            print("✅ CUDA test successful")
-            print(f"   Using CUDA {cp.cuda.runtime.runtimeGetVersion()/1000:.1f}")
-            print(f"   Using NumPy {np.__version__}")
-            print(f"   Using Numba {numba.__version__}")
-            print(f"   Using CuPy {cp.__version__}")
-            return True
-        else:
-            print("❌ CUDA test failed")
+        try:
+            @cuda.jit
+            def test_kernel(x):
+                i = cuda.grid(1)
+                if i < x.shape[0]:
+                    x[i] *= 2
+                    
+            # Simple array test
+            import numpy as np
+            test_array = np.ones(10, dtype=np.float32)
+            d_test = cuda.to_device(test_array)
+            test_kernel[1, 10](d_test)
+            result = d_test.copy_to_host()
+            
+            if np.all(result == 2.0):
+                print("✅ CUDA test successful")
+                print(f"   Using CUDA (CuPy not available)")
+                print(f"   Using NumPy {np.__version__}")
+                print(f"   Using Numba {numba.__version__}")
+                return True
+            else:
+                print("❌ CUDA test failed - using CPU mode")
+                return False
+        except Exception as cuda_error:
+            print(f"⚠️ CUDA test failed: {str(cuda_error)}")
+            print("   GPU acceleration will not be available")
             return False
     
     except (subprocess.CalledProcessError, ImportError, Exception) as e:
@@ -60,8 +70,12 @@ def validate_environment():
     for package in required_packages:
         try:
             module = __import__(package)
-            if package == "numpy" and not (1.22 <= float(module.__version__.split('.')[0] + '.' + module.__version__.split('.')[1]) < 1.29):
-                version_issues.append(f"numpy=={module.__version__} (should be >=1.22.4 and <1.29.0)")
+            # Relax numpy version constraint for newer versions
+            if package == "numpy":
+                version_parts = module.__version__.split('.')
+                major_minor = float(version_parts[0] + '.' + version_parts[1])
+                if major_minor < 1.22:
+                    version_issues.append(f"numpy=={module.__version__} (should be >=1.22)")
         except ImportError:
             missing.append(package)
     
