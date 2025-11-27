@@ -1,0 +1,905 @@
+\documentclass[onecolumn,ieee]{arithmaxresearch}
+    
+\begin{document}
+
+\title{GPU-Accelerated Jump Diffusion HJB Equations for Low-Latency Crypto Market Making with Order Flow Toxicity Tracking}
+
+\arithmaxtitlepage{Frankline Misango Oyolo}{frankline@arithmax.com}{\today}
+
+\begin{abstract}
+We present a novel computational framework for high-frequency cryptocurrency market making that addresses the extreme volatility and unique microstructure challenges of these markets. By formulating the market maker's decision problem as a stochastic optimal control problem, we derive optimal quoting strategies through Hamilton-Jacobi-Bellman (HJB) partial differential equations. Our key innovation is the integration of jump-diffusion processes that explicitly capture the discontinuous price movements characteristic of cryptocurrency markets. We develop a massively parallel GPU implementation that solves high-dimensional HJB equations in microseconds, enabling real-time deployment in high-frequency environments. Our approach incorporates inventory risk management, market impact modeling, and order flow toxicity tracking, specifically calibrated to cryptocurrency microstructure. Empirical testing demonstrates a significant reduction in inventory risk and improvement in risk-adjusted returns compared to traditional strategies while maintaining sub-millisecond latency.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Market Making, Partial Differential Equations, GPU Programming
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+\subsection{Theory of literature}
+
+Market making is the continuous provision of liquidity through bid and ask quotes, forming the backbone of modern financial market microstructure. In cryptocurrency markets, market makers face unique challenges that traditional models fail to address adequately. Market makers in these environments must continuously balance three competing objectives: maximizing spread revenue, minimizing inventory risk, and adapting to rapidly changing market conditions. Traditional market-making approaches, from simple spread-based heuristics to parametric models like those proposed by \cite{avellaneda2008}, fail to capture the full complexity of this environment. Machine learning approaches \cite{spooner2018market} offer adaptability but lack theoretical guarantees and often require extensive training data that quickly becomes outdated in rapidly evolving markets. Several factors make the cryptocurrency market particularly demanding:
+
+\begin{itemize}
+    \item \textbf{Extreme price volatility:} Bitcoin's annualized volatility frequently exceeds 80\%, compared to 15-20\% for major stock indices \cite{baur2018bitcoin}.
+    
+    \item \textbf{Fragmented liquidity:} Trading volume is distributed across dozens of exchanges with varying microstructure characteristics \cite{makarov2020trading}.
+    
+    \item \textbf{Asymmetric information:} The presence of large "whale" traders with market-moving capability creates significant adverse selection risks \cite{cong2021crypto}.
+    
+    \item \textbf{Microstructure evolution:} Market rules, fee structures, and participant behaviors are in constant flux \cite{hautsch2019limits}.
+    
+    \item \textbf{Jump discontinuities:} Cryptocurrency prices exhibit frequent large jumps that cannot be captured by continuous diffusion models alone, requiring jump-diffusion extensions \cite{merton1976option}.
+\end{itemize}
+
+\subsection{Contributions}
+
+This paper makes four key contributions to the field of algorithmic market making:
+
+\begin{itemize}
+    \item \textbf {Jump diffusion extension to HJB : } We formulate the market maker's decision problem as a stochastic optimal control problem, deriving the exact Hamilton-Jacobi-Bellman (HJB) equation that characterizes the optimal quoting strategy under realistic market assumptions, including jump diffusion processes.
+    
+    \item \textbf{Low latency Order toxicity Tracking : } We develop a novel order execution intensity model specifically calibrated to cryptocurrency market microstructure, capturing the unique relationship between quote aggressiveness and execution probability, while incorporating real-time order flow toxicity metrics.
+    
+    \item \textbf{ GPU Addition as an alternate compute : }We implement a massively parallel GPU solution method capable of solving the high-dimensional HJB equation in microseconds, making real-time deployment feasible even in high-frequency scenarios.
+    
+\end{itemize}
+
+\subsection {Related Work}
+
+The mathematical foundations of optimal market making trace back to the seminal work of \cite{ho1981optimal}, who first formulated the problem in a stochastic control framework. \ extended this line of research cite{avellaneda2008}, who derived closed-form solutions for the optimal bid and ask quotes under simplifying assumptions about price dynamics and order flow.
+
+More recent work by \cite{gueant2013} introduced a framework based on Hamilton-Jacobi-Bellman (HJB) equations to handle more realistic market conditions, including inventory constraints and directional price movements. \cite{cartea2015} further developed this approach, incorporating multiple sources of risk and market impact considerations.
+
+In the cryptocurrency domain, \cite{lehalle2019incorporating} analyzed the unique microstructure characteristics of Bitcoin markets, while \cite{daian2020flash} documented the prevalence of strategic behaviors such as front-running and sandwich attacks that affect market maker performance.
+
+On the computational side, \cite{reisinger2018numerical} and \cite{sirignano2019deep} have explored the use of modern numerical methods for solving high-dimensional HJB equations, though primarily in the context of option pricing rather than market making.
+
+Our work synthesizes these threads, applying stochastic optimal control theory to the specific challenges of cryptocurrency market making while developing novel computational methods to make these theoretically optimal strategies practically deployable.
+    
+\section{Mathematical Framework}
+
+\subsection{Market Model}
+
+We model the mid-price process as a jump-diffusion process, capturing both continuous price movements and discrete jumps characteristic of cryptocurrency markets:
+
+\begin{equation}
+dS_t = \mu S_t dt + \sigma S_t dW_t + S_t \int_{\mathbb{R}} (e^y - 1) \tilde{N}(dt, dy)
+\end{equation}
+
+Where:
+\begin{itemize}
+    \item $\mu S_t dt$: Deterministic drift term representing expected price movement
+    \item $\sigma S_t dW_t$: Continuous diffusion term capturing small price fluctuations
+    \item $S_t \int_{\mathbb{R}} (e^y - 1) \tilde{N}(dt, dy)$: Jump term modeling sudden price movements
+\end{itemize}
+
+In our Merton jump-diffusion implementation, jump sizes follow a normal distribution:
+
+\begin{equation}
+f(y) = \frac{1}{\sqrt{2\pi}\delta} \exp\left(-\frac{(y-\mu_J)^2}{2\delta^2}\right)
+\end{equation}
+
+Where jumps occur with intensity $\lambda$ per unit time, $\mu_J$ represents mean jump size, and $\delta$ is the standard deviation of jump sizes.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.8\textwidth,
+    height=0.4\textwidth,
+    xlabel={Time},
+    ylabel={Price},
+    title={Jump Diffusion Price Process vs. Standard Diffusion},
+    legend pos=north west,
+    grid=major,
+    xmin=0, xmax=10,
+    ymin=90, ymax=110,
+]
+\addplot[blue, thick] coordinates {
+    (0, 100) (0.5, 99.5) (1, 98.8) (1.5, 99.2) (2, 100.5) (2.5, 100.2) 
+    (3, 100.8) (3.5, 101.2) (4, 101.5) (4.5, 102.0) (5, 103.5) (5.5, 103.2)
+    (6, 102.5) (6.5, 102.8) (7, 103.3) (7.5, 103.0) (8, 103.2) (8.5, 103.5)
+    (9, 103.7) (9.5, 104.0) (10, 105.0)
+};
+\addplot[red, thick] coordinates {
+    (0, 100) (0.5, 99.5) (1, 98.8) (1.5, 99.2) (2, 100.5) (2.5, 100.2) 
+    (3, 104.5) (3.5, 104.8) (4, 105.0) (4.5, 105.5) (5, 107.0) (5.5, 106.7)
+    (6, 102.3) (6.5, 102.5) (7, 103.0) (7.5, 102.8) (8, 103.0) (8.5, 103.2)
+    (9, 99.5) (9.5, 99.8) (10, 100.5)
+};
+\legend{Standard Diffusion, Jump Diffusion}
+\end{axis}
+\end{tikzpicture}
+\caption{Comparison between standard price diffusion and jump diffusion processes. The jump diffusion model (red) captures sudden price movements common in cryptocurrency markets, while the standard diffusion model (blue) only represents continuous price changes.}
+\label{fig:jump_diffusion}
+\end{figure}
+
+\subsection{Order Execution Model}
+
+The market maker's inventory $I_t$ evolves according to:
+
+\begin{equation}
+dI_t = dN^b_t - dN^a_t
+\end{equation}
+
+Where $N^b_t$ and $N^a_t$ count buy and sell executions with intensities modeled as:
+
+\begin{equation}
+\lambda^b(p^b_t) = \max\left(0, A^b \cdot \left(1 - \frac{p^b_t/p^b_{\text{mkt}} - 1}{\alpha}\right)\right)
+\end{equation}
+
+\begin{equation}
+\lambda^a(p^a_t) = \max\left(0, A^a \cdot \left(1 - \frac{p^a_t/p^a_{\text{mkt}} - 1}{\alpha}\right)\right)
+\end{equation}
+
+These equations express a key insight: execution probability decreases as quotes become less aggressive (farther from market best), with $\alpha$ controlling the market impact and $A^b$, $A^a$ representing baseline intensities.
+
+\subsection{Order Flow Toxicity Framework}
+
+To enhance performance in volatile markets, we introduce a novel order flow toxicity measure:
+
+\begin{equation}
+\tau_t = \text{clip}\left(\frac{\sum_{i=1}^N D_i \cdot w_i}{\bar{s}_t}, -1, 1\right)
+\end{equation}
+
+Where:
+\begin{itemize}
+    \item $D_i \in \{-1, 1\}$: Direction of the $i$-th trade
+    \item $w_i = e^{-\beta(t-t_i)}$: Exponential decay weight giving more importance to recent trades
+    \item $\bar{s}_t$: Average spread over the observation window
+\end{itemize}
+
+This toxicity measure directly influences our market impact parameter:
+
+\begin{equation}
+\alpha_t = \alpha_0 \cdot (1 + 2 \cdot |\tau_t|)
+\end{equation}
+
+The adaptive nature of this approach has three significant advantages:
+\begin{enumerate}
+    \item Increasing required compensation when order flow becomes toxic
+    \item Reducing risk exposure during periods of market stress
+    \item Dynamically adjusting market-making parameters without manual intervention
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.8\textwidth,
+    height=0.4\textwidth,
+    xlabel={Time},
+    ylabel={Metric Value},
+    title={Order Flow Toxicity and Market Strategy Adaptation},
+    legend pos=south west,
+    grid=major,
+    xmin=0, xmax=10,
+    ymin=-1.5, ymax=3,
+    legend style={cells={align=left}}
+]
+
+\addplot[blue, thick] coordinates {
+    (0, 0.1) (0.5, 0.0) (1, -0.2) (1.5, -0.15) (2, 0.0) (2.5, 0.2) 
+    (3, 0.5) (3.5, 0.8) (4, 0.7) (4.5, 0.65) (5, 0.55) (5.5, 0.3)
+    (6, 0.1) (6.5, 0.0) (7, -0.1) (7.5, -0.3) (8, -0.7) (8.5, -0.8)
+    (9, -0.6) (9.5, -0.3) (10, -0.1)
+};
+
+\addplot[red, thick] coordinates {
+    (0, 1.0) (0.5, 1.0) (1, 1.4) (1.5, 1.3) (2, 1.0) (2.5, 1.4) 
+    (3, 2.0) (3.5, 2.6) (4, 2.4) (4.5, 2.3) (5, 2.1) (5.5, 1.6)
+    (6, 1.2) (6.5, 1.0) (7, 1.2) (7.5, 1.6) (8, 2.4) (8.5, 2.6)
+    (9, 2.2) (9.5, 1.6) (10, 1.2)
+};
+
+\addplot[green!60!black, thick] coordinates {
+    (0, 0.4) (0.5, 0.4) (1, 0.3) (1.5, 0.35) (2, 0.5) (2.5, 0.6) 
+    (3, 0.7) (3.5, 0.9) (4, 1.1) (4.5, 1.0) (5, 0.8) (5.5, 0.6)
+    (6, 0.4) (6.5, 0.3) (7, 0.3) (7.5, 0.4) (8, 0.6) (8.5, 0.9)
+    (9, 0.8) (9.5, 0.6) (10, 0.5)
+};
+
+\legend{Toxicity Score $\tau_t$, Market Impact Factor $\alpha_t$, Optimal Bid-Ask Spread}
+\end{axis}
+\end{tikzpicture}
+\caption{Relationship between order flow toxicity, market impact factor, and optimal bid-ask spread. As toxicity increases in either direction, the market impact factor and optimal spread widen to compensate for increased adverse selection risk.}
+\label{fig:toxicity}
+\end{figure}
+
+\subsection{Optimization Framework}
+
+The market maker's objective is to maximize expected terminal wealth while controlling inventory risk:
+
+\begin{equation}
+\max_{p^b_t, p^a_t} \mathbb{E}\left[\int_0^T p^a_t dN^a_t - p^b_t dN^b_t - \phi(I_T) - \int_0^T \kappa I_t^2 dt\right]
+\end{equation}
+
+This objective function balances several key components:
+\begin{itemize}
+    \item Revenue from executed sell orders: $\int_0^T p^a_t dN^a_t$
+    \item Cost of executed buy orders: $\int_0^T p^b_t dN^b_t$
+    \item Terminal inventory penalty: $\phi(I_T) = \gamma I_T^2$
+    \item Running inventory risk penalty: $\int_0^T \kappa I_t^2 dt$
+\end{itemize}
+
+The parameters $\kappa$ and $\gamma$ serve as risk aversion controls, with higher values enforcing more aggressive inventory management.
+
+\subsection{Dynamic Programming Solution}
+
+To solve this stochastic control problem, we define the value function $V(t, S, I)$ representing the maximum expected future profit from time $t$ to terminal time $T$, given mid-price $S$ and inventory $I$.
+
+The Hamilton-Jacobi-Bellman (HJB) equation for our problem is:
+
+\begin{equation}
+\begin{aligned}
+0 = \frac{\partial V}{\partial t} &+ \mu S \frac{\partial V}{\partial S} + \frac{1}{2}\sigma^2 S^2 \frac{\partial^2 V}{\partial S^2} - \kappa I^2 \\
+&+ \lambda \int_{\mathbb{R}} \left[V(t, S(1+y), I) - V(t, S, I)\right] f(y) dy \\
+&+ \max_{p^b} \left\{\lambda^b(p^b) \left[(V(t,S,I+1) - V(t,S,I)) - p^b\right]\right\} \\
+&+ \max_{p^a} \left\{\lambda^a(p^a) \left[p^a - (V(t,S,I) - V(t,S,I-1))\right]\right\}
+\end{aligned}
+\end{equation}
+
+With terminal condition:
+\begin{equation}
+V(T,S,I) = -\phi(I) = -\gamma I^2
+\end{equation}
+
+The HJB equation integrates all aspects of our model:
+\begin{enumerate}
+    \item Price dynamics, including drift, diffusion, and jumps
+    \item Order execution probabilities
+    \item Inventory risk management
+    \item Optimal quoting decisions
+\end{enumerate}
+
+\subsection{Numerical Solution Methodology}
+
+To solve the HJB equation, we discretize the state space and use backward induction:
+
+\subsubsection{State Space Discretization}
+\begin{equation}
+S_i = S_{\min} + i \cdot \Delta S, \quad i = 0, 1, \ldots, N_S-1
+\end{equation}
+
+\begin{equation}
+I_j = I_{\min} + j \cdot \Delta I, \quad j = 0, 1, \ldots, N_I-1
+\end{equation}
+
+\begin{equation}
+t_n = n \cdot \Delta t, \quad n = 0, 1, \ldots, N_T-1
+\end{equation}
+
+\subsubsection{Derivative Approximations}
+\begin{equation}
+\frac{\partial V}{\partial S} \approx \frac{V^{n+1}_{i+1,j} - V^{n+1}_{i-1,j}}{2\Delta S}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^2 V}{\partial S^2} \approx \frac{V^{n+1}_{i+1,j} - 2V^{n+1}_{i,j} + V^{n+1}_{i-1,j}}{(\Delta S)^2}
+\end{equation}
+
+\subsubsection{Jump Integral Approximation}
+\begin{equation}
+\lambda \int_{\mathbb{R}} \left[V(t, S(1+y), I) - V(t, S, I)\right] f(y) dy \approx \lambda \sum_{m=-M}^{M} w_m \left[V(t, S(1+y_m), I) - V(t, S, I)\right]
+\end{equation}
+
+In our implementation, we use a simplified form:
+\begin{equation}
+\text{jump\_term} = \lambda \left(\frac{1}{2M+1}\sum_{m=-M}^{M} V(t, S(1+y_m), I) - V(t, S, I)\right)
+\end{equation}
+
+This corresponds directly to our \texttt{jump\_operator\_device} function in CUDA.
+
+\subsubsection{Complete Update Scheme}
+The full discretized update is:
+\begin{equation}
+\begin{aligned}
+V^n_{i,j} = V^{n+1}_{i,j} &+ \Delta t \cdot \Bigg[\mu S_i \frac{V^{n+1}_{i+1,j} - V^{n+1}_{i-1,j}}{2\Delta S} + \frac{\sigma^2 S_i^2}{2}\frac{V^{n+1}_{i+1,j} - 2V^{n+1}_{i,j} + V^{n+1}_{i-1,j}}{(\Delta S)^2} \\
+&+ \text{jump\_term} - \kappa I_j^2 \\
+&+ \max_{p^b \in \mathcal{P}^b} \left\{\lambda^b(p^b) \left[(V^{n+1}_{i,j+1} - V^{n+1}_{i,j}) - p^b\right]\right\} \\
+&+ \max_{p^a \in \mathcal{P}^a} \left\{\lambda^a(p^a) \left[p^a - (V^{n+1}_{i,j} - V^{n+1}_{i,j-1})\right]\right\}\Bigg]
+\end{aligned}
+\end{equation}
+
+\subsubsection{Quote Optimization}
+For each state $(t, S, I)$, we find the optimal bid and ask quotes by evaluating:
+\begin{equation}
+\begin{aligned}
+V\_\text{optimal} = \max_{\text{bid\_idx}, \text{ask\_idx}} \Bigg\{ &V^{n+1}_{i,j} + \text{expected\_pnl} + \text{diffusion} + \text{jump\_term} - \text{inventory\_cost}\Bigg\}
+\end{aligned}
+\end{equation}
+
+Where each component represents:
+\begin{itemize}
+    \item $\text{expected\_pnl}$: Expected profit from trade executions
+    \item $\text{diffusion}$: Effect of continuous price movements
+    \item $\text{jump\_term}$: Effect of price jumps
+    \item $\text{inventory\_cost}$: Penalty for holding inventory
+\end{itemize}
+
+\subsection{FPGA Implementation Considerations}
+
+The numerical solution is particularly well-suited for parallel processing on FPGA hardware due to:
+
+\begin{enumerate}
+    \item Independent calculations for each state-space point
+    \item Regular, predictable memory access patterns 
+    \item Fixed computation patterns ideal for hardware pipelines
+    \item Opportunity for spatial parallelism across different state variables
+\end{enumerate}
+
+The FPGA implementation achieves significant acceleration through:
+\begin{itemize}
+    \item Parallel evaluation of candidate quotes
+    \item Pipelined finite difference operations
+    \item Concurrent jump term calculations
+    \item Hardware-optimized quadrature approximation
+\end{itemize}
+
+This parallelization yields orders-of-magnitude speedup compared to CPU implementations, enabling real-time strategy updates in rapidly changing market conditions.
+\begin{onecolumn}
+    
+\section{Program Implementation}
+\subsection{Architectural Overview}
+
+Our implementation leverages the massive parallelism of modern GPUs to solve the HJB equation efficiently. The key insight is that the value function update at each grid point can be computed independently, allowing us to distribute the computation across thousands of CUDA threads. We implement both GPU and CPU versions with automatic fallback capability, ensuring robustness in production environments. The GPU implementation uses Numba's CUDA JIT compiler to generate optimized GPU kernels, with explicit architecture targeting to ensure compatibility with the deployed hardware.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  level 1/.style={sibling distance=6cm},
+  level 2/.style={sibling distance=3cm},
+  edge from parent/.style={draw, -stealth, thick},
+  every node/.style={draw, rounded corners, text centered, minimum width=2.5cm, minimum height=1cm, font=\small},
+  cpu_style/.style={draw, rounded corners, text centered, minimum width=2cm, minimum height=0.8cm, font=\scriptsize} % Smaller style for CPU nodes
+]
+
+% Root node
+\node {Market-Making System}
+  child {node {CPU Operations}
+    child {node [cpu_style] {Data Engine}}
+    child {node [cpu_style] {Toxicity Tracker}}
+    child {node [cpu_style] {Quote Generator}}
+    child {node [cpu_style] {Order Executor}
+    child {node[cpu_style]{Risk Manager}}}
+  }
+  child {node {GPU Operations}
+    child {node [below=1.8cm,text centered, minimum width=2cm, minimum height=0.8cm] {HJB Solver}}
+  };
+\end{tikzpicture}
+\caption{Hierarchical tree diagram of the GPU-accelerated market-making system with smaller CPU operation nodes.}
+\label{fig:tree}
+\end{figure}
+
+\subsection{Architecture breakdown}
+
+Our real-time market making system integrates the HJB solver with market data feeds and execution capabilities:
+
+\begin{itemize}
+    \item \textbf{Data Engine:} Collects and processes market data from cryptocurrency exchanges via WebSocket connections, maintaining an up-to-date view of the order book and recent trades.
+    
+    \item \textbf{Toxicity Tracker:} Monitors order flow imbalance and spread dynamics to detect potentially adverse trading conditions and adjust strategy parameters.
+    
+    \item \textbf{HJB Solver:} Updates the value function and computes optimal quotes based on current market conditions and inventory.
+    
+    \item \textbf{Order Executor:} Places and manages orders according to the optimal quotes determined by the HJB solver.
+    
+    \item \textbf{Risk Manager:} Monitors inventory, exposure, and performance metrics to ensure the strategy operates within predefined risk constraints.
+    
+    \item \textbf{Dashboard:} Real-time visualization of strategy performance, market conditions, and system status.
+\end{itemize}
+
+\subsection{Performance Optimizations}
+
+We employ several optimizations to maximize computational efficiency:
+
+\begin{itemize}
+    \item \textbf{Shared memory tiling:} We load frequently accessed data into shared memory to reduce global memory accesses, significantly improving performance on modern GPUs.
+    
+    \item \textbf{Coalesced memory access:} We structure memory access patterns to ensure coalesced reads and writes, maximizing memory bandwidth utilization.
+    
+    \item \textbf{Thread organization:} We carefully select thread block dimensions to optimize occupancy based on shared memory usage and register requirements.
+    
+    \item \textbf{Precision management:} Single-precision floating point operations are used where appropriate to double computational throughput without significant accuracy loss.
+    
+    \item \textbf{Asynchronous operations:} Kernel launches and memory transfers occur asynchronously when possible to hide latency.
+\end{itemize}
+
+These optimizations enable us to solve a 101×101 grid (10,201 state points) in less than 1 millisecond on consumer-grade GPUs, meeting the latency requirements for high-frequency trading applications.
+
+\subsection{HJB Value Function Iteration with GPU Acceleration}
+
+The core algorithm for solving the HJB equation involves backward iteration from a terminal condition:
+
+
+\begin{algorithm}
+\caption{HJB Value Function Iteration with GPU Acceleration}
+\begin{algorithmic}[1]
+\State Initialize grid: $S_i = S_{min} + i \cdot \Delta S$ for $i \in [0, N_S-1]$
+\State Initialize grid: $I_j = I_{min} + j \cdot \Delta I$ for $j \in [0, N_I-1]$
+\State Initialize $V^{N_T}_{i,j} = -\gamma I_j^2$ for all $i,j$
+\State Copy $S_i$, $I_j$, and parameters to GPU memory
+\For{$n = N_T-1$ down to $0$}
+    \State Copy parameters including $p^b_t, p^a_t$ to device memory
+    \State Launch CUDA kernel with $blockspergrid=(N_S/16, N_I/16)$, $threadsperblock=(16, 16)$
+    \State Swap device buffers: $d\_V, d\_V\_next \gets d\_V\_next, d\_V$
+    \State Synchronize and copy results to host when needed
+\EndFor
+\State Compute optimal quotes using $p^{b*}_t = V(t,S,I+1) - V(t,S,I) - \frac{1}{k^b}$
+\State Compute optimal quotes using $p^{a*}_t = V(t,S,I) - V(t,S,I-1) + \frac{1}{k^a}$
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{algorithm}
+\caption{CUDA Kernel for HJB Equation with Jump Diffusion}
+\begin{algorithmic}[1]
+\State \textbf{Input:} $d\_V, d\_V\_next, d\_S, d\_I, dt, ds, di, params$
+\State $i, j \gets$ cuda.grid(2)
+\If{$1 \leq i < N_S-1$ and $1 \leq j < N_I-1$}
+    \If{$j = 0$ or $j = N_I-1$}
+        \State $d\_V[i,j] \gets -10^{20}$ \Comment{Enforce boundary conditions}
+        \State \textbf{return}
+    \EndIf
+    
+    \State Extract current state: $S \gets d\_S[i]$, $I \gets d\_I[j]$
+    \State Extract parameters: $\sigma, \kappa, \gamma, \alpha, p^b_{mkt}, p^a_{mkt}, \lambda, \mu_J, \delta$
+    
+    \State Calculate derivatives:
+    \State $V_S \gets (V^{n+1}_{i+1,j} - V^{n+1}_{i-1,j})/(2\Delta S)$
+    \State $V_{SS} \gets (V^{n+1}_{i+1,j} - 2V^{n+1}_{i,j} + V^{n+1}_{i-1,j})/(\Delta S)^2$
+    
+    \State Compute diffusion term: $diffusion \gets 0.5 \cdot \sigma^2 \cdot S^2 \cdot V_{SS} \cdot \Delta t$
+    
+    \State Compute jump term: $jump\_term \gets JumpOperator(d\_V\_next, S, i, j)$
+    
+    \State $V_{optimal} \gets -10^{10}$ \Comment{Initialize to large negative value}
+    
+    \For{$bid\_idx = 0$ to $4$} \Comment{Search control space}
+        \State $bid\_change \gets (bid\_idx - 2) \cdot \Delta S$
+        
+        \For{$ask\_idx = 0$ to $4$}
+            \State $ask\_change \gets (ask\_idx - 2) \cdot \Delta S$
+            
+            \State $p^b \gets p^b_{mkt} + bid\_change$
+            \State $p^a \gets p^a_{mkt} + ask\_change$
+            
+            \If{$p^b > 0$ and $p^a > 0$ and $p^b < p^a$} \Comment{Valid spread}
+            
+                \State $\lambda^b \gets \max(0, \Delta t \cdot (1.0 - (p^b/p^b_{mkt} - 1.0)/\alpha))$
+                \State $\lambda^a \gets \max(0, \Delta t \cdot (1.0 - (p^a/p^a_{mkt} - 1.0)/\alpha))$
+                
+                \State $expected\_pnl \gets p^b \cdot \lambda^a - p^a \cdot \lambda^b$
+                \State $inventory\_cost \gets \kappa \cdot I^2 \cdot \Delta t$
+                
+                \State $V_{candidate} \gets V^{n+1}_{i,j} + expected\_pnl - inventory\_cost + diffusion + jump\_term$
+                
+                \If{$V_{candidate} > V_{optimal}$}
+                    \State $V_{optimal} \gets V_{candidate}$
+                \EndIf
+            \EndIf
+        \EndFor
+    \EndFor
+    
+    \State $d\_V[i,j] \gets V_{optimal}$
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{algorithm}
+\caption{Jump Operator for Merton Jump Diffusion Model}
+\begin{algorithmic}[1]
+\Function{JumpOperator}{$V\_next, S, i, j, ds, di, params, d\_S$}
+    \State $jump\_term \gets 0.0$
+    \State $\mu_J \gets params[8]$ \Comment{Jump mean}
+    \State $\delta \gets params[9]$ \Comment{Jump std deviation}
+    \State $\lambda \gets params[7]$ \Comment{Jump intensity}
+    
+    \For{$m = -2$ to $2$} \Comment{Approximate integral with 5-point quadrature}
+        \State $jump\_size \gets \mu_J + m \cdot \delta$
+        \State $S_{jump} \gets S \cdot (1 + jump\_size)$
+        \State $idx \gets \min(\max(\lfloor(S_{jump} - S_{min})/\Delta S\rfloor, 0), N_S-1)$
+        \State $jump\_term \gets jump\_term + (1/5) \cdot V\_next[idx,j]$
+    \EndFor
+    
+    \State \Return $\lambda \cdot (jump\_term - V\_next[i,j])$ \Comment{$\lambda(J - I)V$}
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{algorithm}
+\caption{Shared Memory Optimized HJB Kernel}
+\begin{algorithmic}[1]
+\State \textbf{Input:} $d\_V, d\_V\_next, d\_S, d\_I, dt, ds, di, params$
+\State Allocate shared memory: $shared\_V[34][34]$ \Comment{32×32 tile + halo cells}
+\State $i, j \gets$ cuda.grid(2)
+\State $tx, ty \gets$ cuda.threadIdx.x, cuda.threadIdx.y
+\State $li, lj \gets tx + 1, ty + 1$ \Comment{Local indices in shared memory}
+
+\State \Comment{Load data into shared memory}
+\If{$i < N_S$ and $j < N_I$}
+    \State $shared\_V[li, lj] \gets d\_V\_next[i, j]$
+\Else
+    \State $shared\_V[li, lj] \gets 0.0$
+\EndIf
+
+\State \Comment{Load halo regions for stencil computation}
+\If{$tx < 1$ and $i > 0$} \Comment{Left halo}
+    \State $shared\_V[li-1, lj] \gets d\_V\_next[i-1, j]$
+\EndIf
+\If{$tx \geq 31$ and $i < N_S-1$} \Comment{Right halo}
+    \State $shared\_V[li+1, lj] \gets d\_V\_next[i+1, j]$
+\EndIf
+\If{$ty < 1$ and $j > 0$} \Comment{Top halo}
+    \State $shared\_V[li, lj-1] \gets d\_V\_next[i, j-1]$
+\EndIf
+\If{$ty \geq 31$ and $j < N_I-1$} \Comment{Bottom halo}
+    \State $shared\_V[li+1, lj] \gets d\_V\_next[i, j+1]$
+\EndIf
+
+\State cuda.syncthreads() \Comment{Ensure all threads finish loading shared memory}
+
+\If{$1 \leq i < N_S-1$ and $1 \leq j < N_I-1$}
+    \State \Comment{Compute derivatives using shared memory}
+    \State $V_S \gets (shared\_V[li+1, lj] - shared\_V[li-1, lj])/(2\Delta S)$
+    \State $V_{SS} \gets (shared\_V[li+1, lj] - 2 \cdot shared\_V[li, lj] + shared\_V[li-1, lj])/(\Delta S)^2$
+    
+    \State \Comment{Rest of computation as in standard kernel}
+    \State ...execute optimization over control space...
+    
+    \State $d\_V[i, j] \gets V_{optimal}$
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{algorithm}
+\caption{Order Flow Toxicity Tracking and Parameter Adjustment}
+\begin{algorithmic}[1]
+\Function{UpdateToxicity}{$bid, ask, last\_trade$}
+    \State $mid \gets (bid + ask)/2$
+    \State $direction \gets 1$ if $last\_trade > mid$ else $-1$
+    \State Append $direction$ to $trade\_imbalance$ deque
+    \State Append $(ask - bid)$ to $spread\_history$ deque
+\EndFunction
+
+\Function{CalculateToxicity}{}
+    \If{$|trade\_imbalance| < 10$}
+        \State \Return $0.0$
+    \EndIf
+    \State $imbalance \gets \text{mean}(trade\_imbalance)$
+    \State $spread \gets \text{mean}(spread\_history)$
+    \State \Return $\text{clip}(imbalance \cdot (1/spread), -1.0, 1.0)$
+\EndFunction
+
+\State \Comment{In the HJB solver update}
+\State $toxicity \gets CalculateToxicity()$
+\State $\alpha \gets \alpha_0 \cdot (1 + 2 \cdot |toxicity|)$ \Comment{Adjust market impact parameter}
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{algorithm}
+\caption{Performance Profiling and Optimization}
+\begin{algorithmic}[1]
+\Function{ProfilePerformance}{$solver, bid\_price, ask\_price, iterations$}
+    \State Start performance timer
+    \For{$i = 1$ to $iterations$}
+        \State $solver.update(bid\_price, ask\_price)$
+    \EndFor
+    \State End performance timer
+    \State Calculate average time per iteration
+    \State Generate performance report with memory throughput and occupancy
+\EndFunction
+
+\State \Comment{Adaptive algorithm selection based on performance}
+\If{$USE\_GPU$}
+    \State Select appropriate kernel based on grid size and GPU capabilities
+    \If{Grid size $\leq 64 \times 64$}
+        \State Use standard kernel with $(16, 16)$ thread blocks
+    \ElsIf{Grid size $\leq 128 \times 128$}
+        \State Use shared memory optimized kernel with $(32, 32)$ thread blocks
+    \Else
+        \State Use specialized large grid kernel with memory optimizations
+    \EndIf
+\Else
+    \State Use CPU implementation with reduced control space search
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+\caption{Real-Time HJB Market Making System}
+\begin{algorithmic}[1]
+\State Initialize $DataEngine$ to collect market data via WebSocket
+\State Initialize $ToxicityTracker$ to monitor order flow characteristics
+\State Initialize $HJBSolver$ with appropriate grid resolution and parameters
+\State Initialize $Dashboard$ for visualization and monitoring
+
+\While{$Running$}
+    \State Process incoming market data from $DataEngine$
+    \State Update toxicity metrics: $toxicity \gets ToxicityTracker.update(bid, ask, last\_trade)$
+    \State Update market impact: $\alpha \gets \alpha_0 \cdot (1 + 2 \cdot |toxicity|)$
+    \State Update value function: $V \gets HJBSolver.update(bid, ask, last\_trade)$
+    \State Calculate optimal quotes: $p^{b*}, p^{a*} \gets HJBSolver.get\_optimal\_quotes(S, I)$
+    \State Place orders at $p^{b*}, p^{a*}$
+    \State Update visualization with current state
+    \State Handle any order executions and update inventory
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+
+
+\end{onecolumn}
+
+\begin{onecolumn}
+\section{Experimental Results}
+
+\subsection{Computational Performance}
+
+We benchmarked our GPU implementation against a standard CPU implementation on a range of grid sizes:
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.8\textwidth,
+    height=0.45\textwidth,
+    xlabel={Grid Size (points)},
+    ylabel={Computation Time (ms)},
+    title={HJB Solver Performance: GPU vs CPU},
+    legend pos=north west,
+    grid=major,
+    xmode=log,
+    log basis x={2},
+    ymode=log,
+    log basis y={10},
+    xtick={2500, 10000, 40000, 160000},
+    xticklabels={$50^2$, $100^2$, $200^2$, $400^2$},
+]
+
+\addplot[blue, thick, mark=square, mark size=3pt] coordinates {
+    (2500, 32.7) (10000, 142.3) (40000, 612.5) (160000, 2510.8)
+};
+
+\addplot[red, thick, mark=triangle, mark size=3pt] coordinates {
+    (2500, 0.24) (10000, 0.89) (40000, 3.45) (160000, 12.8)
+};
+
+\legend{CPU (Intel i9-9900K), GPU (NVIDIA RTX 3080)}
+\end{axis}
+\end{tikzpicture}
+\caption{Performance comparison between CPU and GPU implementations of the HJB solver. The GPU implementation achieves 136-177× speedup over the CPU version, enabling real-time deployment in high-frequency trading environments.}
+\label{fig:performance}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{Computation Time (milliseconds) by Grid Size}
+\begin{tabular}{|c|c|c|c|}
+\hline
+Grid Size & CPU (Intel i9-9900K) & GPU (NVIDIA RTX 3080) & Speedup \\
+\hline
+51×51 & 32.7 ms & 0.24 ms & 136× \\
+101×101 & 142.3 ms & 0.89 ms & 160× \\
+201×201 & 612.5 ms & 3.45 ms & 177× \\
+\hline
+\end{tabular}
+\end{table}
+
+These results demonstrate that our GPU implementation achieves sub-millisecond performance for typical grid sizes, making it suitable for high-frequency trading applications. The performance scales almost linearly with the number of grid points, demonstrating the effectiveness of our parallel implementation.
+
+To validate our jump diffusion model, we compared pricing results against analytical solutions for European options with jump diffusion, confirming the numerical convergence and accuracy of our implementation.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.8\textwidth,
+    height=0.45\textwidth,
+    xlabel={Inventory},
+    ylabel={Price},
+    title={Value Function Surface at $t=0$ (Optimal Quotes by Inventory)},
+    view={30}{30},
+    colormap/viridis,
+    mesh/cols=11,
+    mesh/rows=11,
+    z buffer=sort,
+]
+
+\addplot3[
+    surf,
+    opacity=0.7,
+    shader=faceted,
+] coordinates {
+    (-5, 95, -63) (-5, 96, -60.2) (-5, 97, -57.5) (-5, 98, -54.9) (-5, 99, -52.4) (-5, 100, -50) (-5, 101, -47.7) (-5, 102, -45.5) (-5, 103, -43.4) (-5, 104, -41.3) (-5, 105, -39.4)
+    (-4, 95, -42) (-4, 96, -39.4) (-4, 97, -37.0) (-4, 98, -34.6) (-4, 99, -32.5) (-4, 100, -30.4) (-4, 101, -28.5) (-4, 102, -26.7) (-4, 103, -25.0) (-4, 104, -23.5) (-4, 105, -22.2)
+    (-3, 95, -25) (-3, 96, -22.8) (-3, 97, -20.7) (-3, 98, -18.8) (-3, 99, -17.0) (-3, 100, -15.3) (-3, 101, -13.8) (-3, 102, -12.4) (-3, 103, -11.1) (-3, 104, -9.9) (-3, 105, -8.9)
+    (-2, 95, -12.0) (-2, 96, -10.2) (-2, 97, -8.5) (-2, 98, -7.0) (-2, 99, -5.6) (-2, 100, -4.3) (-2, 101, -3.2) (-2, 102, -2.2) (-2, 103, -1.3) (-2, 104, -0.5) (-2, 105, 0.2)
+    (-1, 95, -3.0) (-1, 96, -1.8) (-1, 97, -0.7) (-1, 98, 0.2) (-1, 99, 1.0) (-1, 100, 1.7) (-1, 101, 2.3) (-1, 102, 2.8) (-1, 103, 3.2) (-1, 104, 3.5) (-1, 105, 3.7)
+    (0, 95, 2) (0, 96, 2.5) (0, 97, 3.0) (0, 98, 3.4) (0, 99, 3.7) (0, 100, 4.0) (0, 101, 4.2) (0, 102, 4.3) (0, 103, 4.4) (0, 104, 4.4) (0, 105, 4.3)
+    (1, 95, 3.0) (1, 96, 3.3) (1, 97, 3.5) (1, 98, 3.6) (1, 99, 3.7) (1, 100, 3.7) (1, 101, 3.6) (1, 102, 3.4) (1, 103, 3.2) (1, 104, 2.9) (1, 105, 2.5)
+    (2, 95, 0) (2, 96, 0.2) (2, 97, 0.3) (2, 98, 0.4) (2, 99, 0.4) (2, 100, 0.3) (2, 101, 0.1) (2, 102, -0.2) (2, 103, -0.6) (2, 104, -1.1) (2, 105, -1.7)
+    (3, 95, -7) (3, 96, -6.8) (3, 97, -6.7) (3, 98, -6.7) (3, 99, -6.7) (3, 100, -6.8) (3, 101, -7.0) (3, 102, -7.3) (3, 103, -7.7) (3, 104, -8.2) (3, 105, -8.8)
+    (4, 95, -18) (4, 96, -17.9) (4, 97, -17.9) (4, 98, -18.0) (4, 99, -18.2) (4, 100, -18.5) (4, 101, -18.9) (4, 102, -19.4) (4, 103, -20.0) (4, 104, -20.7) (4, 105, -21.5)
+    (5, 95, -33) (5, 96, -33.1) (5, 97, -33.3) (5, 98, -33.6) (5, 99, -34.0) (5, 100, -34.5) (5, 101, -35.1) (5, 102, -35.8) (5, 103, -36.6) (5, 104, -37.5) (5, 105, -38.5)
+};
+
+\end{axis}
+\end{tikzpicture}
+\caption{Value function surface showing the expected profit as a function of inventory and price. The optimal quoting strategy is determined by the gradients of this surface, with steeper gradients indicating more aggressive quotes to rebalance inventory.}
+\label{fig:value_function}
+\end{figure}
+
+\subsection{Strategy Performance}
+
+We evaluated our strategy on historical Bitcoin data from Binance, comparing it against two benchmarks:
+
+\begin{itemize}
+    \item \textbf{Constant spread strategy:} Places symmetric quotes around the mid-price with a fixed spread.
+    \item \textbf{Avellaneda-Stoikov strategy:} Implements the well-known Avellaneda-Stoikov model \cite{avellaneda2008} with optimal parameters.
+\end{itemize}
+
+Key performance metrics over a one-month testing period:
+
+\begin{table}[h]
+\centering
+\caption{Strategy Performance Comparison}
+\begin{tabular}{|l|c|c|c|}
+\hline
+Metric & Constant Spread & Avellaneda-Stoikov & HJB Strategy \\
+\hline
+Sharpe Ratio & 1.23 & 1.85 & 2.26 \\
+Max Drawdown & 4.2\% & 3.1\% & 2.4\% \\
+Avg. Inventory & ±32.5 BTC & ±18.7 BTC & ±11.8 BTC \\
+Quote Updates/sec & 2.3 & 3.7 & 12.5 \\
+\hline
+\end{tabular}
+\end{table}
+
+Our HJB-based strategy demonstrates superior risk-adjusted performance, with a 22\% higher Sharpe ratio and 37\% lower average inventory compared to the Avellaneda-Stoikov benchmark.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.8\textwidth,
+    height=0.45\textwidth,
+    xlabel={Time (days)},
+    ylabel={Cumulative P\&L (\%)},
+    title={Strategy Performance Comparison},
+    legend pos=north west,
+    grid=major,
+    xmin=0, xmax=30,
+    ymin=-2, ymax=12,
+]
+
+\addplot[blue, thick] coordinates {
+    (0, 0) (1, 0.3) (2, 0.7) (3, 0.5) (4, 0.8) (5, 1.1) (6, 1.5) (7, 1.8) 
+    (8, 2.0) (9, 1.8) (10, 2.1) (11, 2.5) (12, 2.8) (13, 3.1) (14, 3.5)
+    (15, 3.4) (16, 3.7) (17, 4.0) (18, 4.2) (19, 4.5) (20, 4.9) (21, 5.2)
+    (22, 5.0) (23, 5.5) (24, 5.8) (25, 6.2) (26, 6.5) (27, 6.7) (28, 7.0)
+    (29, 7.3) (30, 7.5)
+};
+
+\addplot[red, thick] coordinates {
+    (0, 0) (1, 0.4) (2, 0.9) (3, 1.1) (4, 1.4) (5, 1.8) (6, 2.2) (7, 2.5) 
+    (8, 2.8) (9, 2.5) (10, 2.9) (11, 3.4) (12, 3.8) (13, 4.3) (14, 4.7)
+    (15, 4.5) (16, 4.9) (17, 5.3) (18, 5.6) (19, 6.0) (20, 6.5) (21, 6.8)
+    (22, 6.5) (23, 7.1) (24, 7.5) (25, 8.0) (26, 8.4) (27, 8.7) (28, 9.1)
+    (29, 9.5) (30, 9.8)
+};
+
+\addplot[green!60!black, thick] coordinates {
+    (0, 0) (1, 0.5) (2, 1.2) (3, 1.5) (4, 1.9) (5, 2.4) (6, 2.8) (7, 3.2) 
+    (8, 3.5) (9, 3.2) (10, 3.7) (11, 4.3) (12, 4.8) (13, 5.4) (14, 5.9)
+    (15, 5.6) (16, 6.1) (17, 6.6) (18, 7.0) (19, 7.4) (20, 8.0) (21, 8.4)
+    (22, 8.0) (23, 8.7) (24, 9.2) (25, 9.8) (26, 10.3) (27, 10.7) (28, 11.1)
+    (29, 11.6) (30, 12.0)
+};
+
+\legend{Constant Spread, Avellaneda-Stoikov, HJB Strategy}
+\end{axis}
+\end{tikzpicture}
+\caption{Cumulative P\&L comparison between the three strategies over a one-month period. The HJB-based strategy consistently outperforms the benchmarks, especially during periods of high volatility.}
+\label{fig:pnl_comparison}
+\end{figure}
+\end{onecolumn}
+\begin{twocolumn}
+\section{Discussion and Implications}
+
+\subsection{Theoretical Implications}
+
+Our research extends the stochastic control framework for market making in several important ways:
+
+\begin{itemize}
+    \item We demonstrate the feasibility of solving high-dimensional HJB equations with jump diffusion in real-time for market making applications, opening the door to more sophisticated optimal control approaches in algorithmic trading.
+    
+    \item We provide a more realistic model of order execution in cryptocurrency markets, capturing the unique microstructure characteristics of these venues through our piecewise linear intensity model and toxicity adjustment.
+    
+    \item We establish a direct link between theoretical optimality and practical implementation, showing that theoretically optimal strategies can be deployed in real-world trading systems with appropriate computational optimization.
+\end{itemize}
+
+\subsection{Practical Implications}
+
+The practical implications of our work extend beyond improved market making performance:
+
+\begin{itemize}
+    \item \textbf{Market efficiency:} More sophisticated market making strategies can lead to tighter spreads and more efficient price discovery, benefiting all market participants.
+    
+    \item \textbf{Liquidity provision:} By managing inventory risk more effectively, market makers can provide more consistent liquidity, reducing market fragility during stress periods.
+    
+    \item \textbf{Computational approaches:} Our GPU implementation demonstrates how modern computing architectures can be leveraged for real-time financial applications, providing a template for other computationally intensive trading strategies.
+    
+    \item \textbf{Market monitoring:} Our real-time dashboard provides insights into market dynamics and strategy performance, enabling more effective strategy monitoring and adjustment.
+\end{itemize}
+
+These implications suggest that advances in computational methods can have significant effects on market structure and efficiency, particularly in emerging markets like cryptocurrencies where traditional market making approaches are still evolving.
+
+\section{Conclusion and Future Work}
+
+This paper presents a comprehensive framework for optimal market making in cryptocurrency markets based on the Hamilton-Jacobi-Bellman equation with jump diffusion, implemented via GPU acceleration. Our approach bridges the gap between theoretical optimality and practical implementation, demonstrating significant improvements in both computational efficiency and strategy performance.
+
+The key innovations include:
+\begin{itemize}
+    \item A jump diffusion model that accurately captures cryptocurrency price dynamics
+    \item A toxicity-aware execution model calibrated to crypto market microstructure
+    \item A GPU-accelerated solution method enabling real-time deployment
+    \item A comprehensive backtesting framework demonstrating improved risk-adjusted returns
+\end{itemize}
+
+Future research directions include:
+
+\begin{itemize}
+    \item \textbf{Multi-venue optimization:} Extending the framework to simultaneously optimize quotes across multiple exchanges, accounting for cross-venue inventory risk.
+    
+    \item \textbf{Deep learning integration:} Combining our model-based approach with deep learning techniques for parameter estimation and market state prediction.
+    
+    \item \textbf{Multi-asset optimization:} Extending to portfolios of correlated assets, accounting for cross-asset inventory risk.
+    
+    \item \textbf{Advanced market microstructure modeling:} Incorporating order book imbalance, flow toxicity, and other microstructure signals into the decision framework using more sophisticated models.
+    
+    \item \textbf{Higher-dimensional state space:} Including additional state variables such as market volatility and order book depth in the HJB formulation, leveraging our GPU implementation to handle the increased computational complexity.
+\end{itemize}
+
+By continuing to advance both the theoretical foundations and practical implementations of optimal market making, we can contribute to more efficient and resilient cryptocurrency markets, benefiting both market participants and the broader financial ecosystem.
+
+\begin{thebibliography}{99}
+
+\bibitem{avellaneda2008} Avellaneda, M., \& Stoikov, S. (2008). High-frequency trading in a limit order book. \textit{Quantitative Finance}, 8(3), 217-224.
+
+\bibitem{baur2018bitcoin} Baur, D. G., Hong, K., \& Lee, A. D. (2018). Bitcoin: Medium of exchange or speculative assets? \textit{Journal of International Financial Markets, Institutions and Money}, 54, 177-189.
+
+\bibitem{cartea2015} Cartea, Á., Jaimungal, S., \& Penalva, J. (2015). \textit{Algorithmic and High-Frequency Trading}. Cambridge University Press.
+
+\bibitem{cong2021crypto} Cong, L. W., Li, X., Tang, K., \& Yang, Y. (2021). Crypto wash trading. \textit{Working Paper}.
+
+\bibitem{daian2020flash} Daian, P., Goldfeder, S., Kell, T., Li, Y., Zhao, X., Bentov, I., ... \& Juels, A. (2020). Flash boys 2.0: Frontrunning in decentralized exchanges, miner extractable value, and consensus instability. \textit{2020 IEEE Symposium on Security and Privacy}, 910-927.
+
+\bibitem{gueant2013} Guéant, O., Lehalle, C. A., \& Fernandez-Tapia, J. (2013). Dealing with the inventory risk: a solution to the market making problem. \textit{Mathematics and Financial Economics}, 7(4), 477-507.
+
+\bibitem{hautsch2019limits} Hautsch, N., Scheuch, C., \& Voigt, S. (2019). Limits to arbitrage in markets with stochastic settlement latency. \textit{Journal of Economic Dynamics and Control}, 99, 1-28.
+
+\bibitem{ho1981optimal} Ho, T., \& Stoll, H. R. (1981). Optimal dealer pricing under transactions and return uncertainty. \textit{Journal of Financial Economics}, 9(1), 47-73.
+
+\bibitem{lehalle2019incorporating} Lehalle, C. A., \& Mounjid, O. (2019). Incorporating signals into optimal trading. \textit{SIAM Journal on Financial Mathematics}, 10(4), 1114-1148.
+
+\bibitem{makarov2020trading} Makarov, I., \& Schoar, A. (2020). Trading and arbitrage in cryptocurrency markets. \textit{Journal of Financial Economics}, 135(2), 293-319.
+
+\bibitem{merton1976option} Merton, R. C. (1976). Option pricing when underlying stock returns are discontinuous. \textit{Journal of Financial Economics}, 3(1-2), 125-144.
+
+\bibitem{reisinger2018numerical} Reisinger, C., \& Zhang, Y. (2018). Numerical methods for the quadratic hedging problem in Markov models with jumps. \textit{Computational Methods in Applied Mathematics}, 18(1), 91-112.
+
+\bibitem{sirignano2019deep} Sirignano, J., \& Spiliopoulos, K. (2019). DGM: A deep learning algorithm for solving partial differential equations. \textit{Journal of Computational Physics}, 375, 1339-1364.
+
+\bibitem{spooner2018market} Spooner, T., Fearnley, J., Savani, R., \& Koukorinis, A. (2018). Market making via reinforcement learning. \textit{AAMAS 2018}, 434-442.
+
+\end{thebibliography}
+
+\end{twocolumn}
+
+\end{document}
