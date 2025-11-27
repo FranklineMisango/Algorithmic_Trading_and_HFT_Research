@@ -1,0 +1,20 @@
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.dvi
+*.ps
+
+# Font cache
+*.pk
+*.tfm
+*.gf
+
+# Editor backup files
+*~
+*.swp
+*.swo
