@@ -44,7 +44,6 @@ def on_message(ws, message):
                 'asks': data['a'],
                 'lastUpdateId': data['u']
             })
-            # Keep only recent data in memory
             if len(order_book_data) > 1000:
                 order_book_data = order_book_data[-1000:]
     except Exception as e:
