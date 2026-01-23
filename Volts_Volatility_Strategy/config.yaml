@@ -1,0 +1,132 @@
+# Volts Volatility-Based Predictive Trading Strategy Configuration
+
+# Data Settings
+data:
+  # Asset universe - focus on liquid large-cap stocks
+  assets:
+    - MSFT
+    - GOOGL
+    - NVDA
+    - AMZN
+    - META
+    - QCOM
+    - IBM
+    - INTC
+    - MU
+  
+  # Data source
+  data_source: "yfinance"  # or "alpaca", "polygon"
+  
+  # Historical data period
+  start_date: "2020-01-01"
+  end_date: "2025-12-31"
+  
+  # Anomaly removal
+  remove_anomalies: true
+  anomaly_method: "knn"  # k-Nearest Neighbors
+  anomaly_neighbors: 5
+
+# Volatility Estimation Settings
+volatility:
+  # Which estimators to calculate
+  estimators:
+    - "parkinson"
+    - "garman_klass"
+    - "rogers_satchell"
+    - "yang_zhang"
+  
+  # Primary estimator for trading signals
+  primary_estimator: "yang_zhang"
+  
+  # Rolling window for volatility calculation (days)
+  rolling_window: 20
+  
+  # Annualization factor (252 trading days)
+  annualization_factor: 252
+
+# Clustering Settings
+clustering:
+  # Number of clusters (low, mid, high volatility)
+  n_clusters: 3
+  
+  # Target cluster for trading (0=low, 1=mid, 2=high)
+  target_cluster: 1  # mid-volatility
+  
+  # Random state for reproducibility
+  random_state: 42
+
+# Granger Causality Settings
+granger:
+  # Lag range to test
+  min_lag: 2
+  max_lag: 30
+  
+  # Optimal lag (from paper)
+  optimal_lag: 5
+  
+  # Significance level
+  alpha: 0.05
+  
+  # Test only mid-volatility cluster
+  cluster_only: true
+
+# Trading Strategy Settings
+strategy:
+  # Strategy type
+  type: "trend_following"  # or "mean_reversion"
+  
+  # Trend detection method
+  trend_method: "sma_crossover"  # or "linear_regression", "macd"
+  
+  # Trend indicator parameters
+  trend_params:
+    fast_period: 5
+    slow_period: 20
+  
+  # Position sizing
+  initial_capital: 1000  # per pair
+  position_size_pct: 1.0  # 100% of allocated capital
+  
+  # Transaction costs
+  commission: 9.0  # dollars per trade
+  slippage: 0.0005  # 0.05%
+
+# Backtesting Settings
+backtest:
+  # Backtest period (out-of-sample)
+  start_date: "2020-01-01"
+  end_date: "2025-12-31"
+  
+  # Rolling window for re-estimation
+  rolling_window: 252  # days (1 year)
+  
+  # Re-estimation frequency
+  reestimate_frequency: 30  # days
+  
+  # Benchmark
+  benchmark: "SPY"
+
+# Risk Management
+risk:
+  # Maximum drawdown threshold (%)
+  max_drawdown: 10.0
+  
+  # Stop loss (%)
+  stop_loss: 5.0
+  
+  # Take profit (%)
+  take_profit: 15.0
+  
+  # Maximum position hold time (days)
+  max_hold_time: 30
+
+# Output Settings
+output:
+  # Results directory
+  results_dir: "results"
+  
+  # Save plots
+  save_plots: true
+  
+  # Verbosity level
+  verbose: true
