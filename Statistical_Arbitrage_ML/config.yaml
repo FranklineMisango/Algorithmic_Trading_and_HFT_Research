@@ -1,0 +1,130 @@
+# Configuration for Statistical Arbitrage Strategy
+
+# Data Configuration
+data:
+  universe: "russell_3000"  # Stock universe
+  data_dir: "./data"  # Directory for cached data
+  start_date: "2014-01-01"  # Historical data start
+  end_date: "2024-01-01"  # Historical data end
+  cache_enabled: true  # Enable local data caching
+  
+  # Data quality filters
+  min_price: 5.0  # Minimum price (exclude penny stocks)
+  max_price: null  # Maximum price (null = no limit)
+  min_volume: 1000000  # Minimum average daily volume
+  lookback_days: 20  # Period for calculating averages
+
+# Feature Engineering Configuration
+features:
+  # Momentum periods (days)
+  momentum_periods: [5, 10, 20, 60, 126, 252]
+  
+  # Moving average periods (days)
+  ma_periods: [10, 20, 50, 100, 200, 252]
+  
+  # Volume comparison period (days)
+  volume_period: 126  # ~6 months
+  
+  # Target prediction horizons (days)
+  target_horizons: [3]  # 3-day forward returns
+  
+  # Additional technical indicators
+  use_technical_indicators: false  # RSI, MACD, etc.
+
+# Model Configuration
+model:
+  type: "xgboost"  # Options: ridge, lasso, random_forest, gradient_boosting, xgboost, lightgbm
+  
+  # Rolling window training
+  rolling_window_years: 10  # Years of historical data for training
+  retrain_frequency_days: 365  # Retrain annually
+  
+  # Model hyperparameters (for XGBoost)
+  hyperparameters:
+    n_estimators: 100
+    learning_rate: 0.1
+    max_depth: 5
+    subsample: 0.8
+    colsample_bytree: 0.8
+  
+  # Model storage
+  model_dir: "./models"
+  save_checkpoints: true
+
+# Portfolio Configuration
+portfolio:
+  # Position counts
+  n_long: 20  # Number of long positions
+  n_short: 20  # Number of short positions
+  
+  # Capital allocation
+  total_capital: 1000000  # Total capital ($)
+  max_position_size: 0.04  # Maximum position size (4% of capital)
+  
+  # Staggered portfolios
+  n_portfolios: 3  # Number of portfolios with staggered start dates
+  holding_period: 3  # Days to hold positions
+  
+  # Position weighting
+  weighting_scheme: "equal"  # Options: equal, predicted (future enhancement)
+  
+  # Risk filters
+  exclude_biotech: true
+  exclude_penny_stocks: true
+  exclude_meme_stocks: true
+
+# Backtesting Configuration
+backtest:
+  # Transaction costs
+  transaction_cost_bps: 10.0  # Transaction cost (10 basis points = 0.10%)
+  
+  # Market benchmark
+  benchmark: "SPY"  # S&P 500 ETF
+  
+  # Performance targets
+  target_annual_return: 0.20  # 20%
+  target_sharpe_ratio: 1.4
+  target_max_drawdown: 0.20  # 20%
+  target_market_correlation: 0.15  # Low correlation
+  
+  # Reporting
+  output_dir: "./results"
+  generate_plots: true
+  save_trades: true
+
+# Risk Management
+risk:
+  # Stock exclusions
+  exclude_keywords: ["BIOTECH", "BIO", "THERAPEUTICS", "PHARMA"]
+  
+  # Volatility filters
+  max_volatility: 1.0  # Maximum annualized volatility (100%)
+  
+  # Price movement limits
+  max_single_day_return: 0.5  # Flag extreme moves (50%)
+
+# Execution Configuration (for live trading - future)
+execution:
+  mode: "backtest"  # Options: backtest, paper, live
+  
+  # API credentials (for live trading)
+  broker: null  # e.g., "alpaca", "interactive_brokers"
+  api_key_env: "BROKER_API_KEY"
+  api_secret_env: "BROKER_API_SECRET"
+  
+  # Order execution
+  order_type: "market"  # Options: market, limit
+  max_slippage_bps: 5.0  # Maximum acceptable slippage
+
+# Logging Configuration
+logging:
+  level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR
+  log_file: "./logs/strategy.log"
+  console_output: true
+
+# Experimental Features
+experimental:
+  use_sentiment_data: false
+  use_alternative_data: false
+  ensemble_models: false
+  dynamic_rebalancing: false

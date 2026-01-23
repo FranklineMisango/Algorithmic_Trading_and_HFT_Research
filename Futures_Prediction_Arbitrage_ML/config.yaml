@@ -1,0 +1,140 @@
+# Configuration for ML-Based Futures Price Prediction
+# Author: Refactored System
+# Date: 2026-01-19
+
+# Random Seeds for Reproducibility
+random_seed: 42
+numpy_seed: 42
+tensorflow_seed: 42
+
+# Data Configuration
+data:
+  file_path: "live_order_book_data.csv"
+  validation_split: 0.2
+  test_split: 0.2
+  time_aware_split: true
+  
+# Feature Engineering
+features:
+  top_levels: 10  # K - top levels to consider
+  max_levels: 20  # For order book image
+  sequence_length: 20  # For LSTM/CNN
+  rolling_window: 10
+  selected_features:
+    - "imbalance"
+    - "spread"
+    - "mid_price_volatility"
+    - "weighted_mid_price"
+    - "bid_cum_volume"
+    - "ask_cum_volume"
+    - "bid_slope"
+    - "ask_slope"
+    - "depth"
+    - "liquidity_ratio"
+  feature_selection_k: 8
+  use_smote: true
+  smote_imbalance_threshold: 0.5
+
+# Model Configuration
+models:
+  xgboost:
+    classifier:
+      objective: "binary:logistic"
+      max_depth: [3, 5, 7]
+      learning_rate: [0.01, 0.05, 0.1]
+      n_estimators: [100, 200, 300]
+      use_scale_pos_weight: true
+    regressor:
+      objective: "reg:squarederror"
+      max_depth: [3, 5, 7]
+      learning_rate: [0.01, 0.05, 0.1]
+      n_estimators: [100, 200, 300]
+  
+  random_forest:
+    n_estimators: 100
+    class_weight: "balanced"
+    max_depth: [10, 20, 30]
+    min_samples_split: [2, 5, 10]
+  
+  lightgbm:
+    n_estimators: 100
+    class_weight: "balanced"
+    max_depth: [3, 5, 7]
+    learning_rate: [0.01, 0.05, 0.1]
+  
+  lstm:
+    units: [32, 50, 64]
+    dropout_rate: [0.1, 0.2, 0.3]
+    learning_rate: [0.001, 0.01]
+    epochs: 50
+    batch_size: 32
+    early_stopping_patience: 5
+    use_mixed_precision: true
+  
+  cnn:
+    filters: [32, 64]
+    kernel_size: [3, 5]
+    dropout_rate: [0.2, 0.3]
+    learning_rate: [0.001, 0.01]
+    epochs: 50
+    batch_size: 32
+    early_stopping_patience: 5
+
+# Cross-Validation
+cross_validation:
+  n_splits: 5
+  method: "TimeSeriesSplit"  # or "KFold"
+  scoring_clf: "roc_auc"
+  scoring_reg: "neg_mean_squared_error"
+
+# Evaluation
+evaluation:
+  classification_metrics:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+    - "roc_auc"
+  regression_metrics:
+    - "mse"
+    - "mae"
+    - "rmse"
+    - "r2"
+    - "directional_accuracy"
+  use_shap: true
+  shap_sample_size: 100
+
+# Backtesting
+backtesting:
+  initial_capital: 10000
+  transaction_cost: 0.001  # 0.1%
+  position_size: 0.1
+  prediction_threshold: 0.001
+  use_realistic_slippage: true
+  slippage_bps: 2  # 2 basis points
+  market_impact_factor: 0.0001
+  
+# Logging
+logging:
+  level: "INFO"
+  file: "ml_futures_prediction.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# MLflow
+mlflow:
+  enabled: true
+  experiment_name: "futures_price_prediction"
+  tracking_uri: "mlruns"
+  
+# Model Saving
+model_saving:
+  directory: "models"
+  save_best_only: true
+  save_format: "joblib"  # or "pickle", "onnx"
+
+# Production API
+api:
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+  max_workers: 4

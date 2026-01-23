@@ -1,0 +1,6 @@
+{
+  "algorithm-language": "Python",
+  "parameters": {},
+  "description": "Market-neutral statistical arbitrage strategy using machine learning predictions of short-term returns",
+  "cloud-id": 0
+}
