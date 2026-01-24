@@ -1,0 +1,289 @@
+# Crypto Jump Risk Modeling Configuration
+# Based on "Modeling Jump Risk in Crypto Markets" research
+
+# =============================================================================
+# STRATEGY PARAMETERS
+# =============================================================================
+strategy:
+  name: "Crypto_Jump_Risk_Portfolio"
+  description: "Jump-adjusted minimum variance portfolio for crypto markets"
+  objective: "Minimize portfolio risk by accounting for jump contagion effects"
+  
+# =============================================================================
+# DATA CONFIGURATION
+# =============================================================================
+data:
+  # Crypto assets to analyze
+  assets:
+    major:
+      - "BTC"  # Bitcoin
+      - "ETH"  # Ethereum
+    altcoins:
+      - "BNB"  # Binance Coin
+      - "ADA"  # Cardano
+      - "XRP"  # Ripple
+      - "SOL"  # Solana
+      - "DOT"  # Polkadot
+      - "DOGE" # Dogecoin
+      - "AVAX" # Avalanche
+      - "MATIC" # Polygon
+  
+  # Data frequency
+  frequency: "daily"  # Daily returns
+  
+  # Required fields
+  required_fields:
+    - "date"
+    - "asset"
+    - "close"
+    - "volume"
+    - "returns"
+  
+  # Date range
+  start_date: "2020-01-01"
+  end_date: "2024-12-31"
+  
+  # Training/test split
+  train_start: "2020-01-01"
+  train_end: "2023-12-31"
+  test_start: "2024-01-01"
+  test_end: "2024-12-31"
+
+# =============================================================================
+# PHASE 1: JUMP DETECTION
+# =============================================================================
+jump_detection:
+  # Baseline jump-diffusion model
+  baseline_model:
+    # Predictors (from previous day)
+    features:
+      - "recent_return"      # Avg return over lookback window
+      - "recent_volatility"  # Std dev over lookback window
+      - "log_volume"         # Log of trading volume
+    
+    lookback_window: 14  # Days for recent statistics
+    
+  # Jump detection rule
+  detection_rule:
+    method: "three_sigma"
+    threshold: 3.0  # 3-sigma threshold
+    description: "Flag day as jump if |residual| > 3 * std(residuals)"
+  
+  # Jump characteristics to measure
+  metrics:
+    - "jump_intensity"  # Frequency of jumps
+    - "jump_size"       # Average magnitude on jump days
+    - "jump_direction"  # Up vs down jumps
+
+# =============================================================================
+# PHASE 2: CONTAGION ANALYSIS
+# =============================================================================
+contagion:
+  # Copula analysis
+  copulas:
+    types:
+      - "clayton"     # Lower tail dependence
+      - "gumbel"      # Upper tail dependence
+      - "student_t"   # Symmetric tail dependence
+    
+    # Tail dependence parameters
+    tail_dependence:
+      upper_tail_coeff: "lambda_u"  # P(A surge | B surge)
+      lower_tail_coeff: "lambda_l"  # P(A crash | B crash)
+  
+  # Jump ratio calculation
+  jump_ratio:
+    formula: "jump_covariance / total_covariance"
+    high_contagion_threshold: 0.5  # >50% = jump-dominated relationship
+    critical_threshold: 0.7        # >70% = critical risk cluster
+    
+  # Co-jump detection
+  co_jump:
+    window: 1  # Same-day co-jumps
+    min_pair_jumps: 5  # Minimum co-jumps for reliable estimate
+
+# =============================================================================
+# PHASE 3: PORTFOLIO OPTIMIZATION
+# =============================================================================
+portfolio:
+  # Jump-adjusted covariance matrix
+  covariance_adjustment:
+    method: "additive"
+    formula: "Total_Cov = Cov(Returns) + Cov(Jumps)"
+    
+  # Portfolio optimization
+  optimization:
+    objective: "minimum_variance"
+    constraints:
+      - type: "weights_sum_to_one"
+        value: 1.0
+      - type: "long_only"
+        min_weight: 0.0
+        max_weight: 1.0
+      - type: "max_single_asset"
+        value: 0.3  # Max 30% in single asset
+      - type: "min_diversification"
+        min_assets: 3
+  
+  # Rebalancing
+  rebalancing:
+    frequency: "monthly"
+    method: "full_reoptimization"
+
+# =============================================================================
+# BACKTESTING
+# =============================================================================
+backtest:
+  # Initial capital
+  initial_capital: 100000  # $100k
+  
+  # Comparison strategies
+  benchmarks:
+    - name: "equal_weight"
+      description: "Equal weight all assets"
+    - name: "standard_minvar"
+      description: "Min variance without jump adjustment"
+    - name: "btc_eth_6040"
+      description: "60% BTC, 40% ETH"
+  
+  # Transaction costs
+  transaction_costs:
+    trading_fee: 0.001  # 0.1% per trade
+    slippage: 0.0005    # 0.05% slippage
+  
+  # Risk-free rate
+  risk_free_rate: 0.02  # 2% annual
+
+# =============================================================================
+# PERFORMANCE METRICS
+# =============================================================================
+metrics:
+  # Return metrics
+  return_metrics:
+    - "total_return"
+    - "annualized_return"
+    - "cumulative_return"
+  
+  # Risk metrics
+  risk_metrics:
+    - "annualized_volatility"
+    - "downside_volatility"
+    - "max_drawdown"
+    - "var_95"  # Value at Risk (95%)
+    - "cvar_95" # Conditional VaR (95%)
+  
+  # Risk-adjusted metrics
+  risk_adjusted:
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "calmar_ratio"
+    - "information_ratio"
+  
+  # Jump-specific metrics
+  jump_metrics:
+    - "jump_exposure"
+    - "co_jump_frequency"
+    - "avg_jump_loss"
+    - "jump_beta"
+  
+  # Statistical tests
+  statistical_tests:
+    - name: "sharpe_ratio_test"
+      description: "Test if Sharpe ratio significantly better than benchmark"
+      confidence_level: 0.999  # 99.9% as per research
+    - name: "variance_reduction_test"
+      description: "Test if variance significantly reduced"
+    - name: "stress_period_performance"
+      description: "Compare performance during high volatility periods"
+
+# =============================================================================
+# RISK MANAGEMENT
+# =============================================================================
+risk:
+  # Position limits
+  max_leverage: 1.0  # No leverage
+  
+  # Volatility targeting
+  volatility_target:
+    enabled: false
+    target_vol: 0.20  # 20% annual
+  
+  # Stop loss
+  stop_loss:
+    enabled: true
+    threshold: -0.15  # -15% portfolio drawdown
+  
+  # Jump alerts
+  jump_alerts:
+    single_asset_jump: true
+    portfolio_jump: true
+    contagion_spike: true
+
+# =============================================================================
+# ANALYSIS SETTINGS
+# =============================================================================
+analysis:
+  # Correlation analysis
+  correlation:
+    methods:
+      - "pearson"
+      - "spearman"
+      - "kendall"
+  
+  # Rolling window analysis
+  rolling_windows:
+    - 30   # 1 month
+    - 90   # 3 months
+    - 180  # 6 months
+  
+  # Stress testing
+  stress_tests:
+    - name: "crypto_winter"
+      description: "Simulate 50% market crash"
+      market_shock: -0.5
+    - name: "flash_crash"
+      description: "Sudden 20% drop in 1 day"
+      single_day_shock: -0.2
+    - name: "contagion_cascade"
+      description: "Multiple assets jump simultaneously"
+      co_jump_scenario: "extreme"
+
+# =============================================================================
+# VISUALIZATION
+# =============================================================================
+visualization:
+  # Plot types
+  plots:
+    - "jump_timeline"
+    - "tail_dependence_heatmap"
+    - "jump_ratio_network"
+    - "equity_curve"
+    - "drawdown_chart"
+    - "rolling_sharpe"
+    - "jump_size_distribution"
+    - "co_jump_frequency"
+  
+  # Interactive plots (Plotly)
+  interactive:
+    enabled: true
+    save_html: true
+
+# =============================================================================
+# OUTPUT CONFIGURATION
+# =============================================================================
+output:
+  # Results directory
+  results_dir: "results"
+  
+  # Save formats
+  save_formats:
+    - "csv"
+    - "png"
+    - "html"
+  
+  # Reports
+  reports:
+    - "jump_analysis_summary"
+    - "contagion_report"
+    - "portfolio_performance"
+    - "risk_metrics"
