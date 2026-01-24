@@ -2,11 +2,15 @@
 Trading Signal Generator Module
 
 Generates buy/sell signals based on Granger causality relationships
-and trend-following indicators on predictor stock's volatility.
+combining predictor volatility trends with target price trends.
 
+VOLTS Strategy Logic:
 If Stock X's volatility Granger-causes Stock Y's volatility:
-- Positive trend in X's volatility -> BUY Y
-- Negative trend in X's volatility -> SELL Y (or SHORT Y)
+1. When X's volatility trends UP -> Y's volatility will likely increase (high volatility period)
+2. During predicted high volatility for Y, look at Y's PRICE trend:
+   - If Y's price trending UP -> BUY Y (ride the upward momentum in volatile period)
+   - If Y's price trending DOWN -> SELL/SHORT Y (or stay out)
+3. When X's volatility trends DOWN -> Y enters calm period, exit positions
 """
 
 import numpy as np
@@ -222,34 +226,64 @@ class SignalGenerator:
     def generate_signals_for_pair(
         self,
         predictor_volatility: pd.Series,
+        target_price: pd.Series,
         target_ticker: str
     ) -> pd.DataFrame:
         """
-        Generate trading signals for a single pair.
+        Generate trading signals for a single pair using VOLTS methodology.
+        
+        Strategy:
+        1. Detect trend in predictor's volatility
+        2. Detect trend in target's price
+        3. Generate signals:
+           - BUY: When predictor volatility ↑ AND target price ↑ (volatile uptrend)
+           - SELL: When predictor volatility ↑ AND target price ↓ (volatile downtrend)
+           - HOLD: When predictor volatility ↓ (calm period, no clear opportunity)
         
         Parameters:
         -----------
         predictor_volatility : pd.Series
             Volatility time series of predictor stock
+        target_price : pd.Series
+            Price time series of target stock
         target_ticker : str
             Ticker symbol of target stock
             
         Returns:
         --------
-        pd.DataFrame : DataFrame with dates, trend, and signals
+        pd.DataFrame : DataFrame with dates, trends, and signals
         """
         # Detect trend in predictor's volatility
-        trend = self.detect_trend(predictor_volatility)
+        vol_trend = self.detect_trend(predictor_volatility)
         
-        # Generate signals based on trend
-        signals = pd.Series(Signal.HOLD.value, index=trend.index)
-        signals[trend == 1] = Signal.BUY.value
-        signals[trend == -1] = Signal.SELL.value
+        # Detect trend in target's price
+        price_trend = self.detect_trend(target_price)
+        
+        # Align the series
+        common_idx = vol_trend.index.intersection(price_trend.index)
+        vol_trend = vol_trend.loc[common_idx]
+        price_trend = price_trend.loc[common_idx]
+        
+        # Generate signals based on combined logic
+        signals = pd.Series(Signal.HOLD.value, index=common_idx)
+        
+        # BUY: Predictor volatility rising + Target price rising
+        buy_condition = (vol_trend == 1) & (price_trend == 1)
+        signals[buy_condition] = Signal.BUY.value
+        
+        # SELL: Predictor volatility rising + Target price falling  
+        sell_condition = (vol_trend == 1) & (price_trend == -1)
+        signals[sell_condition] = Signal.SELL.value
+        
+        # HOLD: Predictor volatility falling (calm period - exit positions)
+        # This is already the default value
         
         result = pd.DataFrame({
-            'date': trend.index,
-            'predictor_volatility': predictor_volatility.values,
-            'trend': trend.values,
+            'date': common_idx,
+            'predictor_volatility': predictor_volatility.loc[common_idx].values,
+            'target_price': target_price.loc[common_idx].values,
+            'vol_trend': vol_trend.values,
+            'price_trend': price_trend.values,
             'signal': signals.values,
             'target': target_ticker
         })
@@ -261,10 +295,11 @@ class SignalGenerator:
     def generate_signals_for_all_pairs(
         self,
         volatility_df: pd.DataFrame,
-        trading_pairs: pd.DataFrame
+        trading_pairs: pd.DataFrame,
+        price_data: Dict[str, pd.DataFrame]
     ) -> Dict[str, pd.DataFrame]:
         """
-        Generate signals for all trading pairs.
+        Generate signals for all trading pairs using VOLTS methodology.
         
         Parameters:
         -----------
@@ -272,6 +307,8 @@ class SignalGenerator:
             Volatility time series for all assets
         trading_pairs : pd.DataFrame
             DataFrame with predictor->target relationships
+        price_data : Dict[str, pd.DataFrame]
+            Dictionary of price DataFrames for each ticker
             
         Returns:
         --------
@@ -284,8 +321,16 @@ class SignalGenerator:
             target = row['target']
             pair_name = f"{predictor}->{target}"
             
+            # Get target stock's price
+            if target not in price_data:
+                print(f"Warning: No price data for {target}, skipping {pair_name}")
+                continue
+            
+            target_price = price_data[target]['Close']
+            
             signals = self.generate_signals_for_pair(
                 volatility_df[predictor],
+                target_price,
                 target
             )
             
@@ -424,55 +469,70 @@ class SignalAnalyzer:
         """
         import matplotlib.pyplot as plt
         
-        fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+        fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
         
         # Plot 1: Predictor volatility
         axes[0].plot(signals_df.index, signals_df['predictor_volatility'], 
                      label='Predictor Volatility', color='blue', linewidth=1.5)
         axes[0].set_ylabel('Volatility')
-        axes[0].set_title(f'{title} - Predictor Volatility')
+        axes[0].set_title(f'{title} - Predictor Volatility Trend')
         axes[0].legend()
         axes[0].grid(True, alpha=0.3)
         
-        # Plot 2: Trend
-        axes[1].plot(signals_df.index, signals_df['trend'], 
-                     label='Trend', color='green', linewidth=1.5)
+        # Plot 2: Volatility Trend
+        axes[1].plot(signals_df.index, signals_df['vol_trend'], 
+                     label='Volatility Trend', color='purple', linewidth=1.5)
         axes[1].axhline(y=0, color='black', linestyle='--', alpha=0.5)
-        axes[1].fill_between(signals_df.index, 0, signals_df['trend'], 
-                             where=signals_df['trend'] > 0, alpha=0.3, color='green', label='Uptrend')
-        axes[1].fill_between(signals_df.index, 0, signals_df['trend'], 
-                             where=signals_df['trend'] < 0, alpha=0.3, color='red', label='Downtrend')
-        axes[1].set_ylabel('Trend')
-        axes[1].set_title('Trend Detection')
+        axes[1].fill_between(signals_df.index, 0, signals_df['vol_trend'], 
+                             where=signals_df['vol_trend'] > 0, alpha=0.3, color='purple', label='Vol Rising')
+        axes[1].fill_between(signals_df.index, 0, signals_df['vol_trend'], 
+                             where=signals_df['vol_trend'] < 0, alpha=0.3, color='gray', label='Vol Falling')
+        axes[1].set_ylabel('Vol Trend')
+        axes[1].set_title('Predictor Volatility Trend')
         axes[1].legend()
         axes[1].grid(True, alpha=0.3)
         
-        # Plot 3: Signals
+        # Plot 3: Target Price Trend
+        axes[2].plot(signals_df.index, signals_df['price_trend'], 
+                     label='Price Trend', color='orange', linewidth=1.5)
+        axes[2].axhline(y=0, color='black', linestyle='--', alpha=0.5)
+        axes[2].fill_between(signals_df.index, 0, signals_df['price_trend'], 
+                             where=signals_df['price_trend'] > 0, alpha=0.3, color='green', label='Price Rising')
+        axes[2].fill_between(signals_df.index, 0, signals_df['price_trend'], 
+                             where=signals_df['price_trend'] < 0, alpha=0.3, color='red', label='Price Falling')
+        axes[2].set_ylabel('Price Trend')
+        axes[2].set_title('Target Price Trend')
+        axes[2].legend()
+        axes[2].grid(True, alpha=0.3)
+        
+        # Plot 4: Signals on Price Chart
         buy_signals = signals_df[signals_df['signal'] == Signal.BUY.value]
         sell_signals = signals_df[signals_df['signal'] == Signal.SELL.value]
         
         if price_data is not None:
             # Align price data with signals
             aligned_price = price_data.reindex(signals_df.index, method='ffill')
-            axes[2].plot(aligned_price.index, aligned_price.values, 
-                        label='Price', color='black', linewidth=1.5, alpha=0.7)
+            axes[3].plot(aligned_price.index, aligned_price.values, 
+                        label='Target Price', color='black', linewidth=1.5, alpha=0.7)
             
             # Mark buy/sell signals on price chart
-            axes[2].scatter(buy_signals.index, aligned_price.loc[buy_signals.index], 
+            axes[3].scatter(buy_signals.index, aligned_price.loc[buy_signals.index], 
                            color='green', marker='^', s=100, label='BUY', zorder=5)
-            axes[2].scatter(sell_signals.index, aligned_price.loc[sell_signals.index], 
+            axes[3].scatter(sell_signals.index, aligned_price.loc[sell_signals.index], 
                            color='red', marker='v', s=100, label='SELL', zorder=5)
-            axes[2].set_ylabel('Price')
+            axes[3].set_ylabel('Price')
+            axes[3].set_title('Trading Signals on Target Price')
         else:
             # Just plot signals
-            axes[2].plot(signals_df.index, signals_df['signal'], 
+            axes[3].plot(signals_df.index, signals_df['signal'], 
                         label='Signal', color='purple', linewidth=1.5)
-            axes[2].axhline(y=0, color='black', linestyle='--', alpha=0.5)
+            axes[3].axhline(y=0, color='black', linestyle='--', alpha=0.5)
+            axes[3].set_ylabel('Signal')
+            axes[3].set_title('Trading Signals')
         
-        axes[2].set_xlabel('Date')
-        axes[2].set_title('Trading Signals')
-        axes[2].legend()
-        axes[2].grid(True, alpha=0.3)
+        axes[3].set_xlabel('Date')
+        axes[3].legend()
+        axes[3].grid(True, alpha=0.3)
         
         plt.tight_layout()
         

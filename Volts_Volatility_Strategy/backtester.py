@@ -114,10 +114,15 @@ class VoltBacktester:
         --------
         int : Number of shares
         """
-        usable_capital = capital * self.position_size_pct
+        # Prevent trading with negative or zero capital
+        if capital <= 0:
+            return 0
+        
+        # Limit to 95% of capital to prevent over-leverage
+        usable_capital = capital * min(self.position_size_pct, 0.95)
         # Account for commission
         max_shares = (usable_capital - self.commission) / (price * (1 + self.slippage))
-        return int(max_shares)
+        return max(int(max_shares), 0)
     
     def execute_trade(
         self,
@@ -280,7 +285,11 @@ class VoltBacktester:
             # Update equity curve
             current_value = portfolio.cash
             if current_trade is not None and current_trade.is_open():
-                current_value += current_trade.shares * price * current_trade.direction
+                # Calculate unrealized P&L for open position
+                price_change = (price - current_trade.entry_price) * current_trade.direction
+                unrealized_pnl = price_change * current_trade.shares
+                # Add locked capital + unrealized P&L
+                current_value += (current_trade.shares * current_trade.entry_price) + unrealized_pnl
             
             portfolio.equity_curve.append(current_value)
             portfolio.dates.append(date)
@@ -293,9 +302,9 @@ class VoltBacktester:
                     execution_price = price * (1 - self.slippage * current_trade.direction)
                     current_trade.close_trade(date, execution_price)
                     
-                    # Update cash
-                    portfolio.cash += (current_trade.shares * execution_price * current_trade.direction)
-                    portfolio.cash += current_trade.pnl
+                    # Return initial investment + P&L
+                    portfolio.cash += (current_trade.shares * current_trade.entry_price)  # Return locked capital
+                    portfolio.cash += current_trade.pnl  # Add/subtract P&L (includes commissions)
                     
                     portfolio.closed_trades.append(current_trade)
                     current_trade = None
@@ -311,7 +320,7 @@ class VoltBacktester:
                 )
                 
                 if new_trade is not None:
-                    # Update cash
+                    # Deduct cost for both long and short (short requires margin)
                     cost = new_trade.shares * new_trade.entry_price + self.commission
                     portfolio.cash -= cost
                     current_trade = new_trade
@@ -323,8 +332,10 @@ class VoltBacktester:
             execution_price = last_price * (1 - self.slippage * current_trade.direction)
             current_trade.close_trade(last_date, execution_price)
             
-            portfolio.cash += (current_trade.shares * execution_price * current_trade.direction)
+            # Return initial investment + P&L
+            portfolio.cash += (current_trade.shares * current_trade.entry_price)
             portfolio.cash += current_trade.pnl
+            
             portfolio.closed_trades.append(current_trade)
         
         # Calculate metrics
