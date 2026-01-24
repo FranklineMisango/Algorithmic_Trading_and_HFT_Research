@@ -1,0 +1,107 @@
+# Configuration for Deep Learning Momentum Strategy
+
+data:
+  # Stock universe parameters
+  min_price: 5.0  # Filter out stocks below $5
+  exchanges:
+    - NYSE
+    - AMEX
+    - NASDAQ
+  
+  # Time period
+  start_date: '1990-01-01'
+  end_date: '2025-12-31'
+  
+  # Data source
+  source: 'yfinance'  # or 'alpaca'
+  
+# Feature engineering
+features:
+  # Long-term features: monthly returns from t-13 to t-2
+  long_term_lookback_months: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+  
+  # Short-term features: daily returns from most recent month
+  short_term_lookback_days: 20
+  
+  # Anomaly features
+  include_january_effect: true
+  
+  # Preprocessing
+  cross_sectional_zscore: true  # Critical!
+  
+# Model architecture
+model:
+  input_size: 33  # 12 long-term + 20 short-term + 1 anomaly
+  
+  hidden_layers:
+    - 64  # First hidden layer
+    - 4   # Bottleneck layer (compressed representation)
+    - 32  # Third hidden layer
+    - 16  # Fourth hidden layer
+  
+  output_size: 1  # Binary classification (probability)
+  
+  dropout: 0.3
+  activation: 'relu'
+  
+# Training parameters
+training:
+  batch_size: 1024
+  learning_rate: 0.001
+  epochs: 100
+  early_stopping_patience: 10
+  optimizer: 'adam'
+  loss: 'binary_crossentropy'
+  
+# Rolling window validation
+validation:
+  # Window sizes (in months)
+  train_window: 36    # 3 years for training
+  val_window: 12      # 1 year for validation
+  test_window: 12     # 1 year for testing
+  step_size: 6        # Roll forward 6 months
+  
+  # Minimum data requirement
+  min_stocks_per_day: 100
+
+# Trading strategy
+strategy:
+  # Quantile-based approach
+  n_quantiles: 10
+  
+  # Long top quantile, short bottom quantile
+  long_quantile: 10   # Q10
+  short_quantile: 1   # Q1
+  
+  # Position sizing
+  equal_weight: true  # Equal weight within each quantile
+  
+  # Rebalancing
+  rebalance_frequency: 'monthly'  # Monthly rebalancing
+  
+  # Risk management
+  max_position_size: 0.05  # 5% max per stock
+  max_leverage: 2.0        # 100% long + 100% short
+
+# Backtesting
+backtest:
+  initial_capital: 100000
+  
+  # Transaction costs
+  commission: 0.001  # 10 bps
+  slippage: 0.0005   # 5 bps
+  
+  # Short selling costs
+  borrow_cost: 0.005  # 50 bps annually
+  
+  # Benchmark
+  benchmark: 'SPY'
+
+# Output
+output:
+  results_dir: 'results'
+  models_dir: 'models'
+  plots_dir: 'results/plots'
+  save_predictions: true
+  save_models: true
+  verbose: true
