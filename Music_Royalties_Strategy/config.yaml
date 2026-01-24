@@ -1,0 +1,270 @@
+# Music Royalties Systematic Trading Strategy Configuration
+# Based on Quant Radio: Music Royalties vs. Stock Market study (2017-2022)
+
+# =============================================================================
+# STRATEGY PARAMETERS
+# =============================================================================
+strategy:
+  name: "Music_Royalties_LOR_Strategy"
+  description: "Systematic acquisition of Life of Rights music royalty assets with high stability and proven age"
+  objective: "Equity-like returns with low correlation to traditional markets"
+  target_annual_return: 0.10  # 10% target (study median: 12.8%)
+  
+# =============================================================================
+# DATA CONFIGURATION
+# =============================================================================
+data:
+  # Data source (Royalty Exchange or similar platform)
+  source: "royalty_exchange"
+  
+  # Required data fields
+  required_fields:
+    - "asset_id"           # Unique identifier
+    - "transaction_date"   # Sale date
+    - "transaction_price"  # Sale price
+    - "revenue_ltm"        # Last 12 months revenue
+    - "revenue_lty"        # Last 3 years average annual revenue
+    - "catalog_age"        # Age of catalog in years
+    - "contract_type"      # LOR or 10-Year Term
+    - "genre"              # Music genre (optional)
+  
+  # Backtest period (as per study)
+  start_date: "2017-01-01"
+  end_date: "2022-12-31"
+  
+  # Training/validation/test split
+  train_start: "2017-01-01"
+  train_end: "2019-12-31"
+  validation_start: "2020-01-01"
+  validation_end: "2020-12-31"
+  test_start: "2021-01-01"
+  test_end: "2022-12-31"
+
+# =============================================================================
+# FEATURE ENGINEERING
+# =============================================================================
+features:
+  # Stability Ratio = Revenue_LTM / Revenue_LTY
+  stability:
+    target_value: 1.0  # Optimal stability (revenue consistency)
+    min_threshold: 0.33  # Exclude extreme outliers
+    max_threshold: 3.0   # Exclude extreme outliers
+  
+  # Catalog Age Premium
+  age:
+    min_age: 0  # No minimum (but older preferred)
+    weight_direction: "positive"  # Older = better
+  
+  # Price Multiplier = Transaction_Price / Revenue_LTM
+  price_multiplier:
+    description: "Target variable for model training"
+    typical_range: [3, 15]  # Typical multipliers from study
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  # Model type
+  type: "linear_regression"
+  
+  # Model specification (Model 3 from study)
+  # PredictedMultiplier = β₀ + β₁(StabilityRatio) + β₂(CatalogAge) + ε
+  features:
+    - "stability_ratio"
+    - "catalog_age"
+  target: "price_multiplier"
+  
+  # Validation metric
+  validation_metric: "mse"  # Mean Squared Error
+  target_mse: 5.7  # Study's Model 3 MSE
+  
+  # Model update frequency
+  retraining_frequency: "annual"
+
+# =============================================================================
+# PORTFOLIO CONSTRUCTION
+# =============================================================================
+portfolio:
+  # Universe filter
+  universe:
+    contract_type: "LOR"  # Life of Rights ONLY (no 10-year terms)
+    exclude_missing_data: true
+  
+  # Selection method
+  selection:
+    method: "top_quintile"  # Top 20% most undervalued
+    ranking_metric: "model_mispricing"  # Predicted fair value - market price
+    diversification:
+      max_single_asset: 0.02  # 2% per asset (idiosyncratic risk)
+      max_genre_concentration: 0.20  # 20% per genre
+      min_portfolio_size: 50  # Minimum 50 assets for diversification
+  
+  # Weighting
+  weighting_scheme: "equal_weight"  # Equal weight within selected assets
+  
+  # Rebalancing
+  rebalancing_frequency: "annual"  # Annual rebalancing
+  holding_period: 1  # Target 1+ year holding (amortize transaction costs)
+
+# =============================================================================
+# TRANSACTION COSTS
+# =============================================================================
+transaction_costs:
+  # Fixed buyer fee
+  buyer_fee: 500  # $500 per transaction
+  
+  # Seller commission
+  seller_commission: 0.08  # 8% of transaction price
+  
+  # Slippage (illiquid market)
+  slippage:
+    base_rate: 0.03  # 3% base slippage
+    variable_rate: 0.02  # Additional 2% for large orders
+  
+  # Total transaction cost per round trip
+  total_roundtrip_cost: 0.11  # ~11% (8% + 3%)
+
+# =============================================================================
+# RISK MANAGEMENT
+# =============================================================================
+risk:
+  # Position limits
+  max_single_position: 0.02  # 2% max per asset
+  max_leverage: 1.0  # No leverage (illiquid asset class)
+  
+  # Concentration limits
+  max_genre_exposure: 0.20  # 20% per genre
+  
+  # Monitoring thresholds
+  monitoring:
+    min_stability_ratio: 0.5  # Alert if held asset drops below
+    max_drawdown_alert: 0.15  # 15% drawdown alert
+    correlation_threshold: 0.3  # Alert if correlation with S&P 500 exceeds
+  
+  # Stress test scenarios
+  stress_tests:
+    - name: "streaming_rate_shock"
+      description: "30% drop in per-stream payouts"
+      impact_on_revenue: -0.30
+    
+    - name: "platform_failure"
+      description: "Primary marketplace becomes unavailable"
+      impact_on_liquidity: -0.50
+    
+    - name: "age_premium_reversal"
+      description: "Consumer taste shifts to only new music"
+      impact_on_model: "factor_reversal"
+
+# =============================================================================
+# BACKTESTING
+# =============================================================================
+backtest:
+  # Initial capital
+  initial_capital: 1000000  # $1M
+  
+  # Benchmark
+  benchmark: "SPY"  # S&P 500
+  
+  # Survivorship bias control
+  survivorship_bias: false  # Include all assets (even failed ones)
+  
+  # Walk-forward analysis
+  walk_forward:
+    enabled: true
+    train_period: 3  # Years
+    validation_period: 1  # Year
+    test_period: 1  # Year
+
+# =============================================================================
+# PERFORMANCE METRICS
+# =============================================================================
+metrics:
+  # Return metrics
+  - "annualized_return"
+  - "total_return"
+  - "cagr"
+  
+  # Risk metrics
+  - "annualized_volatility"
+  - "sharpe_ratio"
+  - "sortino_ratio"
+  - "calmar_ratio"
+  - "max_drawdown"
+  
+  # Diversification
+  - "correlation_sp500"
+  - "correlation_bonds"
+  - "beta"
+  
+  # Strategy-specific
+  - "transaction_cost_ratio"
+  - "portfolio_turnover"
+  - "win_rate"
+  - "avg_holding_period"
+  
+  # Statistical tests
+  statistical_tests:
+    - name: "ttest_vs_zero"
+      description: "Test if returns significantly > 0"
+    - name: "ttest_vs_benchmark"
+      description: "Test if returns > S&P 500"
+    - name: "correlation_test"
+      description: "Test for low correlation with equities"
+
+# =============================================================================
+# OUTPUT CONFIGURATION
+# =============================================================================
+output:
+  # Results directory
+  results_dir: "results"
+  
+  # Save formats
+  save_formats:
+    - "csv"
+    - "png"
+    - "html"  # Interactive plots
+  
+  # Plots
+  plots:
+    - "equity_curve"
+    - "drawdown_chart"
+    - "monthly_returns_heatmap"
+    - "model_prediction_scatter"
+    - "feature_importance"
+    - "correlation_matrix"
+    - "transaction_cost_impact"
+  
+  # Reports
+  reports:
+    - "performance_summary"
+    - "transaction_log"
+    - "holdings_report"
+    - "risk_report"
+
+# =============================================================================
+# CAPACITY & CONSTRAINTS
+# =============================================================================
+capacity:
+  # Market size constraints
+  estimated_market_size: 100000000  # $100M over 5 years (study data)
+  max_strategy_aum: 50000000  # $50M capacity limit
+  
+  # Liquidity constraints
+  max_market_share: 0.10  # Don't exceed 10% of total market volume
+  min_transaction_frequency: 12  # At least monthly deal flow
+
+# =============================================================================
+# EXECUTION
+# =============================================================================
+execution:
+  # Order types
+  order_type: "limit"  # Limit orders based on model fair value
+  
+  # Fair value adjustment
+  fair_value_discount: 0.20  # Buy at 20% discount to model value (margin of safety)
+  
+  # Due diligence
+  qualitative_overlay: true  # Require manual review beyond model
+  
+  # Latency
+  execution_speed: "low_frequency"  # Monthly/quarterly pace
