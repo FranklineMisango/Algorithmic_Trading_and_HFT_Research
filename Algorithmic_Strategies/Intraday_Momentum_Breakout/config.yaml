@@ -1,0 +1,241 @@
+# Intraday Momentum Breakout Strategy - ES & NQ Futures Configuration
+
+# Strategy Parameters
+strategy:
+  name: "Intraday Momentum Breakout"
+  description: "Capture short-term intraday momentum bursts in ES/NQ futures using volatility-based breakout signals"
+  
+  # Instruments
+  instruments:
+    - "ES"  # E-mini S&P 500 Futures
+    - "NQ"  # E-mini NASDAQ-100 Futures
+  
+  # Noise Area Calculation
+  noise_area:
+    lookback_days: 90  # 90-day historical window (optimal per research)
+    # Alternative lookbacks for testing: [30, 60, 120]
+    method: "percentile"  # Options: "percentile", "std_dev", "atr"
+    
+    # Percentile method (recommended)
+    upper_percentile: 75  # Upper noise boundary
+    lower_percentile: 25  # Lower noise boundary
+    
+    # Standard deviation method (alternative)
+    std_multiplier: 1.5  # Multiplier for std dev
+    
+  # Entry Rules
+  entry:
+    long_trigger: "break_above_upper"  # Price breaks above upper noise boundary
+    short_trigger: "break_below_lower"  # Price breaks below lower noise boundary
+    confirmation_bars: 1  # Number of bars to confirm breakout (prevent false breaks)
+    
+  # Exit Rules
+  exit:
+    # Primary exit: End of session
+    session_close: true
+    session_close_time: "16:00"  # 4:00 PM ET (adjust for futures hours)
+    
+    # Stop-loss: Momentum failure (price re-enters noise area)
+    momentum_failure_stop: true
+    
+    # Trailing stop options
+    trailing_stop_enabled: true
+    trailing_stop_type: "noise_boundary"  # Options: "noise_boundary", "vwap", "percent"
+    trailing_stop_percent: 0.005  # 0.5% if using percent method
+
+# Data Parameters
+data:
+  # Time range
+  start_date: "2018-01-01"  # Strategy improves from 2018+ per research
+  end_date: null  # null = today
+  
+  # Intraday frequency
+  timeframe: "5min"  # Options: "1min", "5min", "15min"
+  
+  # Trading hours (Regular Trading Hours)
+  trading_hours:
+    start: "09:30"  # Market open ET
+    end: "16:00"    # Market close ET
+    timezone: "America/New_York"
+  
+  # Data filtering
+  min_volume: 1000  # Minimum volume per bar
+  exclude_holidays: true
+  exclude_half_days: true
+
+# Position Sizing & Risk Management
+position_sizing:
+  # Volatility targeting (CRITICAL)
+  method: "volatility_target"
+  target_daily_volatility: 0.03  # 3% daily portfolio volatility
+  
+  # Leverage constraints
+  max_leverage: 8.0  # Maximum 8x leverage
+  min_leverage: 1.0  # Minimum leverage
+  
+  # Position limits
+  max_contracts_per_instrument: 50  # Safety limit
+  
+  # Volatility estimation
+  vol_lookback: 20  # Days for volatility calculation
+  vol_method: "ewma"  # Options: "std", "ewma", "garch"
+  ewma_span: 20  # Span for EWMA volatility
+
+# Portfolio Allocation (from research findings)
+portfolio:
+  # Optimal allocation per research
+  allocations:
+    NQ_momentum: 0.50  # 50% to NQ momentum strategy
+    ES_momentum: 0.25  # 25% to ES momentum strategy
+    NQ_long_only: 0.25  # 25% to static long NQ (trend exposure)
+  
+  initial_capital: 100000  # $100,000 starting capital
+  
+  # Rebalancing
+  rebalance_frequency: "daily"  # Adjust allocations daily
+
+# Transaction Costs (CRITICAL - Conservative Assumptions)
+costs:
+  # Commission (per contract, round-trip)
+  commission_per_contract: 4.20  # Typical futures commission
+  
+  # Slippage (in ticks)
+  slippage_ticks: 1.0  # Conservative: 1 tick slippage per side
+  # Research showed slippage significantly impacts returns
+  
+  # Tick values
+  tick_values:
+    ES: 12.50  # $12.50 per tick
+    NQ: 5.00   # $5.00 per tick
+  
+  # Tick sizes
+  tick_sizes:
+    ES: 0.25  # 0.25 point per tick
+    NQ: 0.25  # 0.25 point per tick
+  
+  # Order type (affects slippage)
+  order_type: "market"  # Options: "market", "limit", "adaptive"
+  limit_order_offset_ticks: 1  # If using limit orders
+
+# Risk Management
+risk:
+  # Daily loss limits
+  max_daily_loss_pct: 0.05  # 5% max daily loss
+  max_daily_loss_absolute: 5000  # $5,000 max daily loss
+  
+  # Drawdown limits
+  max_drawdown_pct: 0.20  # Halt strategy at 20% drawdown
+  
+  # Regime filter (optional)
+  regime_filter_enabled: false
+  regime_filter_type: "vix"  # Pause when VIX < threshold
+  vix_threshold: 15
+  
+  # Position monitoring
+  max_position_hold_hours: 6.5  # Max hours to hold (full session)
+  
+  # Margin requirements (per contract)
+  margin_requirements:
+    ES: 12000  # Approximate intraday margin
+    NQ: 16000  # Approximate intraday margin
+
+# Backtesting
+backtest:
+  # Walk-forward analysis
+  walk_forward_enabled: true
+  training_window_days: 365  # 1 year training
+  test_window_days: 90       # 3 months testing
+  step_size_days: 90         # Re-optimize every 3 months
+  
+  # Parameter optimization
+  optimize_params: ["lookback_days", "target_daily_volatility"]
+  param_ranges:
+    lookback_days: [30, 60, 90, 120]
+    target_daily_volatility: [0.02, 0.03, 0.04]
+  
+  # Evaluation metric
+  optimization_metric: "sharpe_ratio"  # Primary: Sharpe Ratio
+  min_sharpe_threshold: 1.0  # Minimum acceptable Sharpe
+
+# Performance Metrics
+metrics:
+  # Returns
+  - "total_return"
+  - "annual_return"
+  - "monthly_return"
+  - "daily_return"
+  
+  # Risk-adjusted
+  - "sharpe_ratio"
+  - "sortino_ratio"
+  - "calmar_ratio"
+  
+  # Drawdown
+  - "max_drawdown"
+  - "avg_drawdown"
+  - "drawdown_duration"
+  
+  # Trading
+  - "win_rate"
+  - "profit_factor"
+  - "avg_win_loss_ratio"
+  - "num_trades"
+  - "trades_per_day"
+  
+  # Capacity
+  - "avg_daily_volume_participation"
+  - "max_position_size"
+
+# Stress Testing
+stress_tests:
+  # High volatility scenarios
+  - name: "flash_crash"
+    description: "Severe temporary slippage (5-10 ticks)"
+    slippage_multiplier: 5.0
+    
+  - name: "march_2020"
+    description: "COVID crash high volatility"
+    start_date: "2020-03-01"
+    end_date: "2020-04-30"
+    
+  - name: "extended_flat"
+    description: "7-year flat period like ES 2010-2017"
+    lookback: 2520  # 7 years of trading days
+
+# Output
+output:
+  results_dir: "results"
+  models_dir: "models"
+  logs_dir: "logs"
+  
+  # Reports
+  generate_html_report: true
+  generate_tearsheet: true
+  save_trades: true
+  save_signals: true
+  
+  # Visualization
+  plot_equity_curve: true
+  plot_drawdown: true
+  plot_returns_distribution: true
+  plot_signal_analysis: true
+  plot_noise_area: true
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/intraday_momentum.log"
+  console: true
+  
+# Alerts (for live trading)
+alerts:
+  enabled: false
+  email: "your_email@example.com"
+  slack_webhook: null
+  
+  # Alert triggers
+  triggers:
+    - "daily_loss_limit_breach"
+    - "max_drawdown_breach"
+    - "exceptional_win"
+    - "exceptional_loss"
