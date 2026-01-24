@@ -94,6 +94,7 @@ Algorithmic_Trading_and_HFT_Research/
 │   ├── Statistical_Arbitrage_ML/    # ML-based market-neutral arbitrage
 │   ├── Futures_Prediction_ML/       # Order book ML prediction
 │   ├── Put_Futures_Spread_Arb/      # Options arbitrage
+│   ├── DP_Ratio_Market_Timing/      # Dividend-price ratio OLS strategy
 │   └── Leveraged_Index_Funds/       # Index fund strategies
 ├── Deep_Learning_Momentum/          # Deep learning momentum ranking
 ├── Market_Making/                   # Market making models
@@ -277,6 +278,35 @@ Exploits put-call parity violations between options and futures contracts.
 - Synthetic futures construction
 
 **Tech Stack**: yfinance, numpy, pandas
+
+#### 6. Dividend-Price Ratio Market Timing
+**Location**: `Algorithmic_Strategies/DP_Ratio_Market_Timing/`
+
+Implements academic research using Δlog(D/P) to predict S&P 500 monthly returns via OLS regression.
+
+**Key Features**:
+- Change in log dividend-price ratio as signal
+- Rigorous in-sample/out-of-sample testing
+- Statistical significance testing (p-values, R²)
+- Transaction cost modeling
+
+**Research Results**:
+- R² (In-Sample): ~7.8%
+- RMSE (Out-Sample): ~3.42% monthly
+- Statistical significance: p ≈ 0
+
+**Critical Limitations**:
+- Single-factor model (weak predictive power)
+- High transaction costs from monthly rebalancing
+- Educational/research purpose only
+
+**Tech Stack**: statsmodels, scikit-learn, yfinance
+
+**Usage**:
+```bash
+cd Algorithmic_Strategies/DP_Ratio_Market_Timing
+python main.py
+```
 
 ### Market Making Models
 
@@ -544,7 +574,10 @@ All strategies track standard quantitative metrics:
 1. Taki & Lee (2013) - "Applying Deep Learning to Enhance Momentum Trading"
 2. Avellaneda & Stoikov (2008) - "High-frequency trading in a limit order book"
 3. Grossman & Miller (1988) - "Liquidity and Market Structure"
-4. Jegadeesh & Titman (1993) - "Returns to Buying Winners and Selling Losers"
+4. Jegadeesh & Titman (1993) - "Returns to Bu
+6. "Can Dividend-Price Ratio Predict Stock Return?" (1927-2017) - D/P ratio predictability study
+7. Campbell & Shiller (1988) - "The Dividend-Price Ratio and Expectations"
+8. Fama & French (1988) - "Dividend Yields and Expected Stock Returns"ying Winners and Selling Losers"
 5. Graham (1949) - "The Intelligent Investor"
 
 ## Contributing

@@ -1,0 +1,124 @@
+# Dividend-Price Ratio Market Timing Strategy Configuration
+
+# Data Parameters
+data:
+  ticker: "^GSPC"  # S&P 500 Price Index
+  total_return_ticker: "^SP500TR"  # S&P 500 Total Return Index (if available)
+  start_date: "1990-01-01"  # Minimum 30+ years recommended
+  end_date: null  # null = today
+  frequency: "monthly"  # Data frequency
+  
+  # Alternative data sources if yfinance fails
+  fallback_tickers:
+    - "SPY"  # SPDR S&P 500 ETF
+    - "VOO"  # Vanguard S&P 500 ETF
+
+# Model Parameters
+model:
+  method: "OLS"  # Ordinary Least Squares regression
+  target_variable: "next_month_return"  # What we predict
+  predictor_variable: "delta_log_dp"  # Change in log(D/P)
+  
+  # Train/test split
+  in_sample_end: "2002-12-31"  # Following the paper (1928-2002)
+  out_sample_start: "2003-01-01"  # Out-of-sample period (2003-2017+)
+  
+  # Statistical significance
+  alpha: 0.05  # p-value threshold
+
+# Trading Strategy
+strategy:
+  signal_threshold: 0.0  # Trade if |signal| > threshold
+  
+  # Position sizing
+  long_allocation: 1.0  # 100% when positive signal
+  short_allocation: 0.0  # 0% (cash) when negative signal
+  # Note: Can modify to allow shorting or leverage
+  
+  # Risk management
+  max_position_size: 1.0  # Maximum 100% allocation
+  min_position_size: 0.0  # Minimum 0% (full cash)
+  
+  # Rebalancing
+  rebalance_frequency: "monthly"  # Align with signal frequency
+
+# Transaction Costs
+costs:
+  commission_pct: 0.001  # 0.1% per trade (10 bps)
+  slippage_pct: 0.0005  # 0.05% slippage (5 bps)
+  tax_rate: 0.0  # Set to 0 for pre-tax analysis
+  
+  # Total cost per round-trip trade
+  total_cost_pct: 0.0015  # 15 bps per trade
+
+# Backtesting
+backtest:
+  initial_capital: 100000  # $100,000 starting capital
+  compound_returns: true  # Compound or simple returns
+  include_costs: true  # Include transaction costs
+  
+  # Benchmark
+  benchmark: "SPY"  # Buy-and-hold S&P 500
+  
+  # Risk-free rate (for Sharpe)
+  risk_free_rate: 0.02  # 2% annual
+
+# Performance Metrics
+metrics:
+  # Returns
+  - "total_return"
+  - "annualized_return"
+  - "monthly_return_mean"
+  - "monthly_return_std"
+  
+  # Risk
+  - "sharpe_ratio"
+  - "sortino_ratio"
+  - "max_drawdown"
+  - "calmar_ratio"
+  - "volatility"
+  
+  # Trading
+  - "num_trades"
+  - "win_rate"
+  - "profit_factor"
+  - "avg_trade_duration"
+  
+  # Model quality
+  - "r_squared"
+  - "rmse"
+  - "mae"
+  - "p_value"
+
+# Visualization
+visualization:
+  style: "seaborn-v0_8-darkgrid"
+  figure_size: [14, 8]
+  dpi: 100
+  
+  plots:
+    - "equity_curve"
+    - "drawdown"
+    - "monthly_returns"
+    - "rolling_sharpe"
+    - "signal_distribution"
+    - "returns_vs_signal"
+    - "cumulative_alpha"
+
+# Output
+output:
+  results_dir: "results"
+  models_dir: "models"
+  save_model: true
+  save_predictions: true
+  save_trades: true
+  
+  # Report generation
+  generate_html_report: true
+  generate_pdf_report: false
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/dp_ratio_strategy.log"
+  console: true
