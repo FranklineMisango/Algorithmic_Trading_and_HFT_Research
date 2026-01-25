@@ -1,0 +1,272 @@
+# Deep Reinforcement Learning Portfolio Allocation Configuration
+
+# Asset Universe
+assets:
+  symbols:
+    - "SPY"   # S&P 500 (Stocks)
+    - "AGG"   # Bloomberg Aggregate Bond (Bonds)
+    - "GLD"   # Gold (Commodities)
+    - "VNQ"   # Vanguard Real Estate (Real Estate)
+  
+  names:
+    SPY: "U.S. Equities"
+    AGG: "U.S. Aggregate Bonds"
+    GLD: "Gold / Commodities"
+    VNQ: "Real Estate"
+  
+  # Asset class properties
+  expected_volatility:
+    SPY: 0.15  # 15% annualized
+    AGG: 0.05  # 5% annualized
+    GLD: 0.18  # 18% annualized
+    VNQ: 0.20  # 20% annualized
+
+# Data Configuration
+data:
+  start_date: "2010-01-01"
+  end_date: "2024-12-31"
+  frequency: "daily"  # daily or weekly
+  
+  # Train/validation/test split
+  train_ratio: 0.70   # 70% for training
+  validation_ratio: 0.10  # 10% for validation (within training period)
+  test_ratio: 0.20    # 20% for out-of-sample testing
+  
+  # Feature windows
+  lookback_window: 20  # days for rolling statistics
+  
+  # Optional macro features
+  include_macro: false
+  macro_indicators:
+    - "^VIX"  # VIX volatility index
+    - "^IRX"  # 13-week Treasury bill
+
+# Environment Configuration
+environment:
+  name: "PortfolioGym-v0"
+  
+  # Action space (portfolio weights)
+  action_space:
+    type: "box"  # Continuous action space
+    n_assets: 4
+    normalization: "softmax"  # Ensure weights sum to 1
+    
+  # State space
+  state_space:
+    features:
+      - "current_weights"       # Current portfolio allocation
+      - "asset_returns_20d"     # 20-day returns
+      - "asset_volatility_20d"  # 20-day rolling volatility
+      - "asset_momentum_20d"    # 20-day momentum
+      - "correlation_matrix"    # Asset correlations
+    normalization: "zscore"     # Z-score normalize features
+  
+  # Reward function
+  reward:
+    type: "log_return_minus_volatility"
+    components:
+      log_return_weight: 1.0
+      volatility_penalty: 0.5   # Penalize high volatility
+      drawdown_penalty: 0.0     # Optional drawdown penalty
+      transaction_cost_penalty: 1.0
+    
+  # Position constraints
+  constraints:
+    min_weight: 0.0        # No short selling
+    max_weight: 0.4        # Max 40% in single asset
+    max_leverage: 1.0      # No leverage
+    cash_reserve: 0.0      # Minimum cash reserve
+
+# Deep RL Agent Configuration
+agent:
+  algorithm: "PPO"  # Options: PPO, A2C, SAC, TD3
+  
+  # PPO specific parameters
+  ppo:
+    learning_rate: 0.0003
+    n_steps: 2048          # Steps per update
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99            # Discount factor
+    gae_lambda: 0.95       # GAE parameter
+    clip_range: 0.2        # PPO clip parameter
+    ent_coef: 0.01         # Entropy coefficient (exploration)
+    vf_coef: 0.5           # Value function coefficient
+    max_grad_norm: 0.5
+  
+  # Neural network architecture
+  policy:
+    type: "MlpPolicy"
+    net_arch:
+      - type: "pi"         # Policy network
+        layers: [128, 128]
+      - type: "vf"         # Value network
+        layers: [128, 128]
+    activation: "tanh"
+  
+  # Training parameters
+  training:
+    total_timesteps: 500000
+    eval_freq: 10000
+    n_eval_episodes: 10
+    log_interval: 100
+    save_freq: 50000
+    verbose: 1
+
+# Benchmark Configuration
+benchmark:
+  # Markowitz Mean-Variance Optimization
+  markowitz:
+    estimation_window: 252  # 1 year for covariance estimation
+    risk_free_rate: 0.02    # 2% annual
+    target_return: null     # Max Sharpe if null
+    rebalance_frequency: 20 # days
+    
+  # 60/40 Portfolio
+  classic_6040:
+    weights:
+      SPY: 0.60
+      AGG: 0.40
+      GLD: 0.0
+      VNQ: 0.0
+    rebalance_frequency: 60  # Quarterly
+  
+  # Equal Weight
+  equal_weight:
+    rebalance_frequency: 20
+
+# Backtesting Configuration
+backtest:
+  # Execution costs
+  costs:
+    commission_bps: 10     # 10 bps per trade
+    slippage_bps: 5        # 5 bps slippage
+    
+  # Rebalancing
+  rebalancing:
+    frequency: "weekly"    # daily, weekly, monthly
+    min_trade_size: 0.01   # Min 1% position change to trade
+    
+  # Risk management
+  risk:
+    max_drawdown_threshold: 0.15  # 15% circuit breaker
+    position_limits:
+      min: 0.0
+      max: 0.4
+    
+  # Evaluation metrics
+  metrics:
+    - "total_return"
+    - "annualized_return"
+    - "annualized_volatility"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "calmar_ratio"
+    - "sortino_ratio"
+    - "win_rate"
+    
+  # Statistical testing
+  statistical_tests:
+    significance_level: 0.05
+    tests:
+      - "t_test"           # T-test for return difference
+      - "diebold_mariano"  # Forecast comparison
+
+# Hyperparameter Optimization
+hyperopt:
+  enabled: true
+  framework: "optuna"
+  
+  search_space:
+    learning_rate: [0.0001, 0.001]  # log uniform
+    gamma: [0.95, 0.999]
+    ent_coef: [0.0, 0.1]
+    volatility_penalty: [0.0, 1.0]
+    
+  optimization:
+    n_trials: 50
+    n_jobs: 4
+    metric: "sharpe_ratio"
+    direction: "maximize"
+    timeout: 7200  # 2 hours
+
+# Monitoring & Explainability
+monitoring:
+  # XAI techniques
+  explainability:
+    enabled: true
+    methods:
+      - "shap"       # SHAP values
+      - "lime"       # LIME explanations
+      - "attention"  # Attention weights
+    frequency: "monthly"
+  
+  # Online adaptation
+  online_learning:
+    enabled: false
+    retrain_frequency: 90  # days
+    fine_tune_epochs: 5
+    
+  # Alerts
+  alerts:
+    sharpe_ratio_min: 0.5
+    max_drawdown_alert: 0.10
+    tracking_error_max: 0.05
+
+# Research Configuration
+research:
+  # Ablation studies
+  ablation:
+    reward_functions:
+      - "log_return"
+      - "sharpe_ratio"
+      - "sortino_ratio"
+      - "log_return_minus_volatility"
+    
+    architectures:
+      - [64, 64]
+      - [128, 128]
+      - [256, 128, 64]
+    
+    lookback_windows: [10, 20, 60]
+  
+  # Stress testing
+  stress_tests:
+    - name: "Financial Crisis"
+      start: "2008-09-01"
+      end: "2009-03-31"
+    - name: "COVID Crash"
+      start: "2020-02-01"
+      end: "2020-04-30"
+    - name: "2022 Bear Market"
+      start: "2022-01-01"
+      end: "2022-10-31"
+  
+  # Sensitivity analysis
+  sensitivity:
+    parameters:
+      - "transaction_costs"
+      - "lookback_window"
+      - "volatility_penalty"
+    ranges:
+      transaction_costs: [0, 10, 20, 30]  # bps
+      lookback_window: [5, 10, 20, 60]
+      volatility_penalty: [0.0, 0.5, 1.0, 2.0]
+
+# Output Configuration
+output:
+  results_dir: "results"
+  models_dir: "trained_models"
+  logs_dir: "logs"
+  
+  save_formats:
+    - "csv"
+    - "parquet"
+    - "pickle"
+  
+  visualization:
+    plot_training_curves: true
+    plot_portfolio_evolution: true
+    plot_asset_weights: true
+    plot_drawdowns: true
+    style: "seaborn"

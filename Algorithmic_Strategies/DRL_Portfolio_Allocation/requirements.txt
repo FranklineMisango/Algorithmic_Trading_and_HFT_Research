@@ -1,0 +1,47 @@
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+scipy>=1.10.0
+
+# Deep RL frameworks
+stable-baselines3>=2.0.0
+gymnasium>=0.28.0  # Replaces gym
+sb3-contrib>=2.0.0  # Additional algorithms
+
+# Deep learning backends
+torch>=2.0.0  # PyTorch (for SB3)
+# tensorflow>=2.13.0  # Alternative: TensorFlow
+
+# Portfolio optimization
+cvxpy>=1.3.0  # For Markowitz optimization
+scikit-learn>=1.3.0
+
+# Data acquisition
+yfinance>=0.2.28
+pandas-datareader>=0.10.0
+
+# Hyperparameter optimization
+optuna>=3.3.0
+optuna-dashboard>=0.13.0  # Visualization
+
+# Explainability (XAI)
+shap>=0.42.0
+lime>=0.2.0.1
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0
+tqdm>=4.66.0
+joblib>=1.3.0
+
+# Visualization
+plotly>=5.17.0
+tensorboard>=2.13.0  # Training monitoring
+
+# Statistical testing
+statsmodels>=0.14.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
