@@ -1,0 +1,61 @@
+# Credit Carry Strategy Configuration
+
+strategy:
+  name: "Credit_Carry"
+  description: "Credit default swap spread carry strategy"
+  target_volatility: 0.10
+  rebalance_frequency: "weekly"
+  
+data:
+  start_date: "2005-01-01"
+  end_date: null
+  
+  # CDS indices
+  cds_indices:
+    - "CDX.NA.IG"  # North America Investment Grade
+    - "CDX.NA.HY"  # North America High Yield
+    - "iTraxx.Europe"  # European Investment Grade
+    - "iTraxx.Crossover"  # European High Yield
+    - "CDX.EM"  # Emerging Markets
+    
+  # Credit fundamentals
+  fundamentals:
+    - "default_rates"
+    - "recovery_rates"
+    - "credit_spreads"
+    - "leverage_ratios"
+    
+signals:
+  # Carry calculation
+  holding_period: 63  # 3 months
+  
+  # Z-score parameters
+  zscore_window: 252
+  entry_threshold: 1.0
+  exit_threshold: 0.5
+  
+  # Factor neutralization
+  neutralize_factors:
+    - "equity_market"  # S&P 500 correlation
+    - "high_yield_beta"  # HY credit risk
+    - "rates"  # Interest rate sensitivity
+    
+portfolio:
+  weighting_scheme: "inverse_volatility"
+  vol_lookback: 63
+  
+  max_position_size: 0.25
+  max_sector_exposure: 0.50
+  
+  gross_leverage: 2.0
+  net_leverage: 1.0
+  
+backtesting:
+  transaction_cost_bps: 10
+  benchmark: "LQD"  # Investment Grade Corporate Bond ETF
+  risk_free_rate: "US_3M_TBILL"
+  
+  stress_periods:
+    - ["2008-09-01", "2009-03-01"]  # GFC
+    - ["2011-08-01", "2011-12-31"]  # European debt crisis
+    - ["2020-03-01", "2020-04-01"]  # COVID crash
