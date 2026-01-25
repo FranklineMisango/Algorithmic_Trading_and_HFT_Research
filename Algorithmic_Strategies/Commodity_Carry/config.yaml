@@ -1,0 +1,62 @@
+# Commodity Carry Strategy Configuration
+
+strategy:
+  name: "Commodity_Carry"
+  description: "Commodity futures carry via convenience yield"
+  target_volatility: 0.10
+  rebalance_frequency: "weekly"
+  
+data:
+  start_date: "2005-01-01"
+  end_date: null
+  
+  # Commodity futures
+  commodities:
+    - "CL"   # Crude Oil
+    - "HG"   # Copper
+    - "GC"   # Gold
+    - "SI"   # Silver
+    - "NG"   # Natural Gas
+    - "C"    # Corn
+    - "W"    # Wheat
+    - "S"    # Soybeans
+    - "CT"   # Cotton
+    - "KC"   # Coffee
+    
+  # Contract maturities
+  contract_months: [1, 3, 6, 12]  # months out
+  
+signals:
+  # Convenience yield = spot - forward (adjusted for storage/interest)
+  roll_window: 63
+  
+  # Z-score parameters
+  zscore_window: 252
+  entry_threshold: 1.0
+  exit_threshold: 0.5
+  
+  # Factor neutralization
+  neutralize_factors:
+    - "dollar_index"
+    - "equity_market"
+    - "energy_sector"  # Oil/gas correlation
+    
+portfolio:
+  weighting_scheme: "inverse_volatility"
+  vol_lookback: 63
+  
+  max_position_size: 0.15
+  max_sector_exposure: 0.40  # Energy, metals, agriculture
+  
+  gross_leverage: 2.0
+  net_leverage: 1.0
+  
+backtesting:
+  transaction_cost_bps: 8
+  benchmark: "DBC"  # Commodity ETF
+  risk_free_rate: "US_3M_TBILL"
+  
+  stress_periods:
+    - ["2008-07-01", "2009-02-01"]  # Commodity crash
+    - ["2014-06-01", "2016-01-01"]  # Oil collapse
+    - ["2020-03-01", "2020-04-01"]  # COVID crash
