@@ -1,0 +1,330 @@
+# Configuration for Crypto Macro-Fundamental Strategy
+# Based on "Quant Radio: What Really Drives Crypto Prices?"
+
+# Strategy Metadata
+strategy:
+  name: "Crypto Macro-Fundamental"
+  description: "Systematic crypto trading using external macro factors and internal crypto dynamics"
+  paper_reference: "Adams, Ibert, and Lea - What Really Drives Crypto Prices"
+  objective: "Model Bitcoin price via Fed policy, market risk, and crypto-specific factors"
+
+# Assets
+assets:
+  primary: "BTC-USD"  # Bitcoin
+  secondary: ["ETH-USD"]  # Ethereum
+  universe: ["BTC-USD", "ETH-USD", "Total Crypto Market Cap", "Total Stablecoin Market Cap"]
+
+# Data Configuration
+data:
+  start_date: "2018-01-01"  # Post-2017 bubble, sufficient history
+  end_date: "2024-12-31"
+  frequency: "daily"  # Daily closing prices
+  
+  # Data sources
+  sources:
+    crypto_prices: "yfinance"  # BTC-USD, ETH-USD
+    market_cap: "coinmarketcap"  # Total crypto & stablecoin market caps (API or scraping)
+    treasury_yield: "fred"  # Federal Reserve Economic Data - DGS2 (2-Year Treasury)
+    vix: "yfinance"  # ^VIX
+    events: "manual"  # ETF approvals, regulatory decisions
+  
+  # Stablecoin composition
+  stablecoins:
+    - "USDT"  # Tether
+    - "USDC"  # USD Coin
+    - "BUSD"  # Binance USD (historical)
+    - "DAI"   # MakerDAO
+  
+  # Train/validation/test splits
+  train_ratio: 0.60  # 60% training (2 years rolling window)
+  validation_ratio: 0.20  # 20% validation
+  test_ratio: 0.20  # 20% test (out-of-sample)
+
+# Feature Engineering
+features:
+  # External Macro Signal
+  external_macro:
+    enabled: true
+    components:
+      - name: "treasury_yield_change"
+        field: "DGS2"
+        transformation: "diff"  # Δ(US 2-Year Treasury Yield)
+      - name: "vix_change"
+        field: "VIX"
+        transformation: "diff"  # Δ(VIX Index)
+    
+    aggregation: "sum"  # Δ(Treasury) + Δ(VIX)
+    normalization: "zscore"  # Z-Score normalization
+    lookback_period: 60  # 60 trading days for Z-Score
+    interpretation: "Positive = bearish (tightening + fear)"
+  
+  # Crypto Risk Premium Signal
+  crypto_risk_premium:
+    enabled: true
+    numerator: "stablecoin_market_cap_growth"
+    denominator: "total_crypto_market_cap_growth"
+    
+    growth_windows: [5, 20]  # 5-day and 20-day rolling growth
+    interpretation: "Rising ratio = bearish (capital seeking safety)"
+    
+    # Historical validation periods (from transcript)
+    validation_events:
+      - event: "March 2020 COVID Crash"
+        expected: "spike"
+      - event: "FTX Collapse Nov 2022"
+        expected: "spike"
+  
+  # Adoption/Growth Signal
+  adoption_growth:
+    enabled: true
+    base: "total_crypto_market_cap_ex_stablecoins"
+    transformation: "log_diff"  # Δ(Log(Market Cap))
+    window: 30  # 30-day rolling growth rate
+    interpretation: "Positive acceleration = bullish"
+  
+  # Institutional Validation Signal
+  institutional_validation:
+    enabled: true
+    type: "binary_flag"
+    duration: 30  # Days after event
+    interpretation: "1 for 30 days post-event = bullish"
+    
+    # Major events (manually curated)
+    events:
+      - date: "2024-01-10"
+        description: "BlackRock Spot Bitcoin ETF Launch"
+        impact: "positive"
+      - date: "2021-10-19"
+        description: "First Bitcoin Futures ETF (BITO)"
+        impact: "positive"
+      - date: "2022-06-18"
+        description: "Celsius/3AC Collapse"
+        impact: "negative"
+      - date: "2022-11-11"
+        description: "FTX Collapse"
+        impact: "negative"
+  
+  # Interaction terms
+  interactions:
+    enabled: true
+    terms:
+      - name: "macro_risk_compound"
+        formula: "external_macro * crypto_risk_premium"
+        interpretation: "Compounding stress scenarios"
+  
+  # Lag to avoid look-ahead bias
+  lag_days: 1  # All features lagged by 1 day
+  
+  # Outlier handling
+  winsorize:
+    enabled: true
+    lower_percentile: 2.5
+    upper_percentile: 97.5
+
+# Machine Learning Model
+model:
+  type: "xgboost"  # Primary: XGBoost, Alternative: RandomForest
+  target: "btc_log_return"  # Next-day Bitcoin log return
+  
+  # XGBoost hyperparameters (will be tuned)
+  xgboost:
+    default_params:
+      n_estimators: 100
+      max_depth: 5
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+      objective: "reg:squarederror"
+      eval_metric: "rmse"
+      random_state: 42
+    
+    # Hyperparameter search space (Bayesian Optimization)
+    search_space:
+      n_estimators: [50, 100, 200, 300]
+      max_depth: [3, 5, 7, 10]
+      learning_rate: [0.01, 0.05, 0.1, 0.2]
+      subsample: [0.6, 0.8, 1.0]
+      colsample_bytree: [0.6, 0.8, 1.0]
+  
+  # Alternative: Random Forest
+  random_forest:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 5
+    random_state: 42
+  
+  # Validation
+  validation:
+    method: "walk_forward"
+    train_window: 504  # 2 years (~500 trading days)
+    test_window: 126   # 6 months (~125 trading days)
+    step_size: 21      # Roll forward 1 month at a time
+    
+  # Hyperparameter tuning
+  hyperopt:
+    method: "bayesian"  # Bayesian Optimization
+    optimizer: "optuna"
+    n_trials: 50
+    n_jobs: 4
+    objective_metric: "sharpe_ratio"  # Maximize out-of-sample Sharpe
+    direction: "maximize"
+
+# Signal Generation & Portfolio Construction
+signals:
+  # Position sizing
+  sizing:
+    method: "volatility_scaled"
+    formula: "K * model_score"
+    target_volatility: 0.15  # 15% annualized volatility
+    
+  # Leverage
+  leverage:
+    max_leverage: 2.0  # Maximum 2x long or short
+    
+    # Risk-off condition (no leverage)
+    risk_off_condition:
+      macro_signal_quartile: 4  # Top 25% (extreme tightening)
+      risk_premium_quartile: 4  # Top 25% (extreme fear)
+      action: "reduce_to_1x"
+  
+  # Order execution
+  execution:
+    order_type: "market_on_close"
+    rebalance_frequency: "daily"
+
+# Backtest Configuration
+backtest:
+  initial_capital: 100000  # $100k
+  
+  # Transaction costs
+  costs:
+    commission_bps: 10   # 0.10% per trade (retail crypto exchange)
+    slippage_bps: 5      # 0.05% slippage
+    total_bps: 15        # Total: 0.15%
+  
+  # Example calculation (from blueprint)
+  # 50% position on $100k = $50k trade
+  # Cost = $50k * 0.0015 = $75
+  
+  # Benchmark
+  benchmark:
+    type: "buy_and_hold"
+    asset: "BTC-USD"
+    alternative: "SPY"  # S&P 500 for comparison
+
+# Risk Management
+risk:
+  # Stop-loss
+  stop_loss:
+    type: "drawdown"
+    threshold: 0.10  # 10% drawdown from peak
+    action: "reduce_positions_50pct"  # Cut all positions by 50%
+  
+  # Stress test periods (from transcript)
+  stress_tests:
+    periods:
+      - name: "COVID Crash"
+        start: "2020-03-01"
+        end: "2020-03-31"
+        expected: "External macro + risk premium spike"
+      
+      - name: "Fed Tightening 2022"
+        start: "2022-01-01"
+        end: "2022-12-31"
+        expected: "64% crash (vs 14% without Fed per paper)"
+      
+      - name: "FTX Collapse"
+        start: "2022-11-01"
+        end: "2022-11-30"
+        expected: "Risk premium spike, internal shock"
+  
+  # Monitoring alerts
+  alerts:
+    stablecoin_ratio_spike:
+      enabled: true
+      condition: "5day_risk_premium > 90day_ma + 1*std"
+      action: "email_alert"
+    
+    model_decay:
+      enabled: true
+      metric: "rolling_3month_sharpe"
+      threshold: 0.0
+      action: "halt_trading"
+  
+  # Position limits
+  position_limits:
+    max_position_size: 1.0  # 100% of capital (before leverage)
+    min_position_size: 0.0  # Can go to cash
+
+# Evaluation Metrics
+evaluation:
+  metrics:
+    - "annualized_return"
+    - "annualized_volatility"
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "win_rate"
+    - "calmar_ratio"
+  
+  # Statistical tests
+  statistical_tests:
+    t_test:
+      enabled: true
+      null_hypothesis: "strategy_return = benchmark_return"
+      significance_level: 0.05
+      type: "one_sided"
+  
+  # Capacity analysis
+  capacity:
+    enabled: true
+    price_impact_bps: 20  # 0.20% per $1M traded
+    test_capital_levels: [100000, 500000, 1000000, 5000000, 10000000]
+    degradation_threshold: 0.10  # Report where Sharpe degrades by 10%
+
+# Output Configuration
+output:
+  results_dir: "results"
+  models_dir: "models"
+  logs_dir: "logs"
+  
+  save_formats: ["csv", "parquet", "pickle"]
+  
+  visualization:
+    plot_signals: true
+    plot_feature_importance: true
+    plot_cumulative_returns: true
+    plot_drawdowns: true
+    style: "seaborn"
+  
+  # Model interpretability
+  explainability:
+    enabled: true
+    methods:
+      - "feature_importance"
+      - "shap_values"
+    frequency: "quarterly"
+
+# Research Configuration
+research:
+  # Ablation studies
+  ablation:
+    enabled: true
+    tests:
+      - "remove_macro_signal"
+      - "remove_risk_premium"
+      - "remove_adoption_signal"
+      - "remove_institutional_events"
+      - "no_interactions"
+  
+  # Robustness checks
+  robustness:
+    - name: "regime_correlation_monitor"
+      metric: "6month_rolling_corr(macro_signal, btc_return)"
+      threshold: 0.1
+      action: "pause_macro_component if corr < 0.1"
+    
+    - name: "stablecoin_peg_monitor"
+      check: "USDT/USD price"
+      threshold: [0.98, 1.02]  # ±2% band
+      action: "exclude_if_outside_band"
