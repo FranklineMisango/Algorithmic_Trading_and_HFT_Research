@@ -1,0 +1,263 @@
+# AI Economy Score Predictor Strategy Configuration
+
+# Data Sources
+data:
+  # Earnings call transcripts
+  transcripts:
+    source: "seekingalpha"  # Options: seekingalpha, capiq, bloomberg, alphaSense
+    universe: "SP500"  # SP500 or RUSSELL3000
+    start_date: "2006-01-01"
+    end_date: "2023-12-31"
+    min_us_revenue_pct: 0.50  # Exclude non-US focused firms
+    
+  # Macroeconomic indicators
+  macro:
+    fred_api_key: "YOUR_FRED_API_KEY"
+    indicators:
+      gdp:
+        series_id: "GDP"
+        frequency: "quarterly"
+        transform: "pct_change"
+      industrial_production:
+        series_id: "INDPRO"
+        frequency: "monthly"
+        transform: "pct_change"
+      employment:
+        series_id: "PAYEMS"  # Non-farm payrolls
+        frequency: "monthly"
+        transform: "level"
+      wages:
+        series_id: "CES0500000003"  # Average hourly earnings
+        frequency: "monthly"
+        transform: "pct_change"
+    
+  # Survey of Professional Forecasters (SPF) consensus
+  spf:
+    url: "https://www.philadelphiafed.org/surveys-and-data/real-time-data-research/survey-of-professional-forecasters"
+    variables: ["RGDP", "INDPROD", "UNEMP"]
+
+# LLM Configuration
+llm:
+  provider: "openai"  # Options: openai, anthropic, local
+  model: "gpt-4"  # gpt-4, gpt-3.5-turbo, claude-3-opus, llama-3-70b
+  api_key: "YOUR_OPENAI_API_KEY"
+  
+  # Scoring prompt
+  prompt_template: |
+    You are an expert economic analyst. Analyze the following excerpt from a company's earnings call transcript.
+    
+    Focus on the management's outlook regarding the **US economy** specifically.
+    
+    Rate the company's economic outlook on the following scale:
+    5 - Increase Substantially (Very positive outlook for US economy)
+    4 - Increase Moderately (Somewhat positive outlook)
+    3 - No Change (Neutral outlook)
+    2 - Decrease Moderately (Somewhat negative outlook)
+    1 - Decrease Substantially (Very negative outlook)
+    
+    Transcript Excerpt:
+    {text}
+    
+    Provide ONLY a single number (1-5) as your response.
+  
+  # Processing parameters
+  max_tokens: 10
+  temperature: 0.0  # Deterministic scoring
+  chunk_size: 2000  # Characters per LLM call
+  focus_sections: ["md&a", "guidance"]  # Management Discussion or Q&A
+  
+  # Quality control
+  human_validation_sample_size: 500
+  score_consistency_threshold: 0.85  # Min correlation with human scores
+
+# Feature Engineering
+features:
+  # Score aggregation
+  aggregation:
+    national_weight: "value"  # value or equal
+    industry_weight: "equal"
+    
+  # Normalization
+  normalization:
+    method: "zscore"
+    rolling_window: 20  # quarters (5 years)
+    
+  # N-gram analysis
+  ngrams:
+    enabled: true
+    min_n: 2
+    max_n: 4
+    tfidf_top_k: 100
+    
+  # Delta signals
+  delta_features:
+    - "yoy_change"  # AGG_t - AGG_{t-4}
+    - "qoq_change"  # AGG_t - AGG_{t-1}
+    - "momentum"    # (AGG_t - AGG_{t-4}) - (AGG_{t-4} - AGG_{t-8})
+
+# Prediction Models
+models:
+  gdp:
+    horizons: [1, 2, 3, 4]  # quarters ahead
+    controls:
+      - "yield_curve_slope"  # 10Y - 2Y Treasury
+      - "consumer_sentiment"  # University of Michigan
+      - "lagged_gdp_growth"
+    min_r2: 0.15  # Minimum out-of-sample R²
+    
+  industrial_production:
+    horizons: [1, 2, 3, 4, 6, 8, 10]  # quarters ahead
+    controls:
+      - "lagged_ip_growth"
+      - "pmi"  # ISM Manufacturing PMI
+    min_r2: 0.10
+    
+  employment:
+    horizons: [1, 2, 3, 4, 6, 8, 10]  # quarters ahead
+    controls:
+      - "lagged_employment"
+      - "initial_claims"
+    min_r2: 0.08
+    
+  wages:
+    horizons: [1, 2, 3, 4, 6, 8, 10]  # quarters ahead
+    controls:
+      - "lagged_wage_growth"
+      - "core_cpi"
+    min_r2: 0.05
+
+# Trading Strategy
+strategy:
+  # Portfolio construction
+  portfolio:
+    type: "multi_industry"  # national or multi_industry
+    national_assets:
+      - symbol: "SPY"
+        name: "S&P 500 ETF"
+      - symbol: "ES"
+        name: "E-mini S&P 500 Futures"
+        
+    industry_etfs:
+      - symbol: "XLI"
+        name: "Industrials"
+        gics_sector: "25"
+      - symbol: "XLF"
+        name: "Financials"
+        gics_sector: "40"
+      - symbol: "XLE"
+        name: "Energy"
+        gics_sector: "10"
+      - symbol: "XLY"
+        name: "Consumer Discretionary"
+        gics_sector: "25"
+      - symbol: "XLP"
+        name: "Consumer Staples"
+        gics_sector: "30"
+      - symbol: "XLV"
+        name: "Health Care"
+        gics_sector: "35"
+      - symbol: "XLK"
+        name: "Technology"
+        gics_sector: "45"
+      - symbol: "XLB"
+        name: "Materials"
+        gics_sector: "15"
+      - symbol: "XLRE"
+        name: "Real Estate"
+        gics_sector: "60"
+      - symbol: "XLU"
+        name: "Utilities"
+        gics_sector: "55"
+    
+  # Signal generation
+  signals:
+    benchmark: "spf_consensus"  # Compare to Survey of Professional Forecasters
+    long_threshold: 0.5  # Long if prediction > SPF + 0.5 std
+    short_threshold: -0.5  # Short if prediction < SPF - 0.5 std
+    top_k_industries: 3  # Trade top 3 positive and bottom 3 negative
+    
+  # Position sizing
+  position_sizing:
+    method: "equal_risk"  # equal_weight or equal_risk
+    max_single_position: 0.25  # 25% max allocation
+    leverage: 1.0
+    volatility_target: 0.15  # 15% annualized
+    
+  # Rebalancing
+  rebalancing:
+    frequency: "quarterly"  # After each earnings season
+    timing: "market_on_close"
+    
+# Risk Management
+risk:
+  # Stop-loss
+  stop_loss:
+    strategy_level_drawdown: 0.15  # 15% drawdown triggers review
+    
+  # Volatility adjustment
+  volatility_filter:
+    vix_threshold: 30
+    exposure_reduction: 0.50  # Reduce by 50% when VIX > 30
+    
+  # Position limits
+  position_limits:
+    max_gross_exposure: 1.0  # 100%
+    max_net_exposure: 1.0
+    max_sector_exposure: 0.40  # 40% per sector
+    
+# Execution
+execution:
+  # Transaction costs
+  costs:
+    etf_commission_bps: 3
+    futures_commission_bps: 0.5
+    etf_slippage_bps: 5
+    futures_slippage_bps: 1
+    
+  # Order parameters
+  orders:
+    type: "market_on_close"
+    participation_rate: 0.02  # Max 2% of daily volume
+    
+# Backtest Configuration
+backtest:
+  # Periods
+  training_start: "2006-01-01"
+  training_end: "2015-12-31"
+  validation_start: "2016-01-01"
+  validation_end: "2019-12-31"
+  test_start: "2020-01-01"
+  test_end: "2023-12-31"
+  
+  # Initial capital
+  initial_capital: 10000000  # $10M
+  
+  # Stress test periods
+  stress_periods:
+    - name: "Financial Crisis"
+      start: "2008-09-01"
+      end: "2009-03-31"
+    - name: "COVID-19"
+      start: "2020-02-01"
+      end: "2020-06-30"
+  
+# Monitoring & Validation
+monitoring:
+  # Model performance
+  performance_metrics:
+    - "information_ratio"
+    - "oos_r2"  # Out-of-sample R²
+    - "max_drawdown"
+    - "win_rate"
+    - "tracking_error"
+    
+  # Quality checks
+  quality_checks:
+    llm_human_correlation_threshold: 0.80
+    transcript_completeness_threshold: 0.95  # Min % of universe with data
+    prediction_mape_vs_spf: 1.0  # Must beat SPF MAPE
+    
+  # Alerts
+  alerts:
+    rolling_sharpe_3y_min: 0.5
+    correlation_agg_gdp_min: 0.30  # AGG_t vs subsequent GDP surprise
