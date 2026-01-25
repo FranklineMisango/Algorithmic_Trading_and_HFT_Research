@@ -1,0 +1,85 @@
+# AI-Enhanced 60/40 Portfolio Configuration
+
+# Data Parameters
+data:
+  start_date: "2017-01-01"
+  end_date: "2024-12-31"
+  lookback_period: 12  # months for model training
+  rebalance_frequency: "M"  # Monthly rebalancing
+  
+# Asset Universe
+assets:
+  traditional:
+    - ticker: "SPY"  # S&P 500 ETF (stocks)
+      name: "US Equities"
+    - ticker: "TLT"  # Long-term Treasury ETF (bonds)
+      name: "US Bonds"
+  alternative:
+    - ticker: "BTC-USD"  # Bitcoin
+      name: "Bitcoin"
+      max_allocation: 0.30  # Maximum 30% allocation
+    - ticker: "GLD"  # Gold ETF
+      name: "Gold"
+      max_allocation: 0.20  # Maximum 20% allocation
+
+# Economic Indicators (Features)
+indicators:
+  vix:
+    ticker: "^VIX"
+    name: "CBOE Volatility Index"
+    description: "Market fear gauge"
+  yield_spread:
+    long_term: "^TNX"  # 10-year Treasury yield
+    short_term: "^IRX"  # 13-week Treasury yield
+    name: "Yield Spread"
+    description: "10Y - 3M Treasury spread"
+  interest_rate:
+    ticker: "DFF"  # Federal Funds Rate
+    name: "Fed Funds Rate"
+    description: "Primary interest rate"
+    source: "FRED"  # Federal Reserve Economic Data
+
+# Machine Learning Model
+model:
+  type: "DecisionTreeRegressor"
+  parameters:
+    max_depth: 5
+    min_samples_split: 10
+    min_samples_leaf: 5
+    random_state: 42
+  validation:
+    test_size: 0.2
+    cv_folds: 5
+  
+# Portfolio Constraints
+portfolio:
+  min_allocation: 0.0  # Minimum allocation per asset
+  max_allocation: 1.0  # Maximum total allocation
+  risk_free_rate: 0.02  # Annual risk-free rate for Sharpe calculation
+  transaction_cost: 0.001  # 0.1% transaction cost
+  
+# Backtesting
+backtest:
+  initial_capital: 100000
+  benchmark: "SPY"  # Buy-and-hold SPY benchmark
+  metrics:
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "cagr"
+    - "volatility"
+    - "calmar_ratio"
+  
+# Sensitivity Analysis
+sensitivity:
+  lookback_periods: [6, 12, 18, 24]  # months
+  btc_max_allocations: [0.10, 0.20, 0.30, 0.40]
+  max_depths: [3, 5, 7, 10]
+
+# Output
+output:
+  results_dir: "results"
+  figures_dir: "figures"
+  models_dir: "models"
+  save_predictions: true
+  save_allocations: true
