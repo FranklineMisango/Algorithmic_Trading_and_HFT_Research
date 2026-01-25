@@ -1,0 +1,529 @@
+# Sentiment-Based Equity Strategy Configuration
+# Market-Labeled LLM for Cross-Sectional Alpha
+
+# ============================================================================
+# STRATEGY METADATA
+# ============================================================================
+strategy:
+  name: "Sentiment-LLM-Equity"
+  version: "1.0.0"
+  description: "Cross-sectional equity market-neutral strategy using market-labeled LLM sentiment"
+  hypothesis: |
+    Sentiment extracted from financial text using a market-labeled Large Language Model
+    contains predictive information for future stock returns not captured by traditional factors.
+    Markets exhibit a "negativity bias" where negative sentiment has stronger price impact,
+    particularly for smaller, less-followed companies with higher information asymmetry.
+  
+  one_sentence_objective: |
+    Generate alpha by constructing a daily-rebalanced, equal-weighted portfolio that goes long
+    stocks with highest AI-derived sentiment scores and short stocks with lowest sentiment scores.
+
+# ============================================================================
+# DATA SOURCES & ACQUISITION
+# ============================================================================
+data:
+  # Universe definition
+  universe:
+    name: "Russell 3000"
+    share_codes: [10, 11]  # Common stocks only
+    min_price: 5.0  # Minimum stock price
+    min_market_cap_percentile: 10  # NYSE 10th percentile
+    survivorship_bias_free: true
+  
+  # Date range
+  period:
+    start_date: "2010-01-01"
+    end_date: "2023-12-31"
+    training_start: "2010-01-01"
+    training_end: "2018-12-31"
+    validation_start: "2019-01-01"
+    validation_end: "2020-12-31"
+    test_start: "2021-01-01"
+    test_end: "2023-12-31"
+  
+  # Text data sources
+  text_sources:
+    news:
+      enabled: true
+      vendors:
+        - "Bloomberg"
+        - "Reuters"
+        - "PR Newswire"
+        - "RavenPack"  # Aggregated news
+      lookback_days: 1  # Daily aggregation
+      timestamp_cutoff: "16:00:00"  # Market close ET
+    
+    social_media:
+      enabled: true
+      platforms:
+        - "Twitter/X"
+        - "StockTwits"
+        - "Reddit (WallStreetBets)"
+      vendors:
+        - "Accern"
+        - "BuzzFeed"
+      min_mentions: 5  # Minimum mentions per day
+      verified_accounts_only: false
+    
+    filings:
+      enabled: true
+      types:
+        - "8-K"
+        - "10-K"
+        - "10-Q"
+        - "Earnings Call Transcripts"
+      vendors:
+        - "SEC EDGAR"
+        - "Seeking Alpha"
+        - "Bloomberg Transcripts"
+    
+    analyst_reports:
+      enabled: true
+      include_summaries: true
+      include_ratings_changes: true
+  
+  # Market data
+  market_data:
+    frequency: "daily"
+    fields:
+      - "open"
+      - "high"
+      - "low"
+      - "close"
+      - "volume"
+      - "adjusted_close"
+    
+    reference_data:
+      - "market_cap"
+      - "shares_outstanding"
+      - "sector"  # GICS Level 1
+      - "industry"  # GICS Level 2
+      - "beta"
+    
+    vendor: "CRSP"  # Survivorship-bias-free
+    alternative_vendors:
+      - "Compustat"
+      - "Bloomberg"
+      - "FactSet"
+
+# ============================================================================
+# TEXT PROCESSING & NLP
+# ============================================================================
+text_processing:
+  # Entity linking and NER
+  entity_linking:
+    method: "named_entity_recognition"
+    ner_model: "flair/ner-english-ontonotes-large"
+    disambiguation:
+      enabled: true
+      use_context: true
+      ticker_symbol_mapping: true
+  
+  # Cleaning rules
+  cleaning:
+    deduplication:
+      enabled: true
+      similarity_threshold: 0.85  # Cosine similarity
+      method: "MinHash LSH"
+    
+    filters:
+      min_text_length: 50  # Minimum characters
+      remove_boilerplate: true
+      remove_disclaimers: true
+      language: "en"
+    
+    normalization:
+      lowercase: false  # BERT is case-sensitive
+      remove_urls: true
+      remove_html: true
+      remove_special_chars: false  # Keep punctuation for sentiment
+  
+  # Aggregation
+  aggregation:
+    method: "concatenate"  # All text for stock i on day t
+    max_length: 512  # BERT max sequence length
+    truncation: "tail"  # Keep most recent text
+    separator: " [SEP] "
+
+# ============================================================================
+# SENTIMENT MODEL (Smarty BERT)
+# ============================================================================
+model:
+  architecture: "BERT"
+  variant: "bert-base-uncased"
+  name: "Smarty BERT"
+  
+  # Pre-training
+  pretraining:
+    corpus: "financial_text"  # Financial news, filings, etc.
+    corpus_size: "20 years of data"
+    steps: 1000000
+    checkpoint: "pretrained_financial_bert.pth"
+  
+  # Fine-tuning (Market-Labeled)
+  finetuning:
+    objective: "regression"  # Predict continuous abnormal return
+    loss_function: "mse"  # Mean Squared Error
+    
+    label_construction:
+      # Label = AbnormalReturn(i, t+1) = Return(i, t+1) - Beta(i) * MarketReturn(t+1)
+      market_proxy: "SPY"  # S&P 500 ETF
+      beta_estimation_window: 252  # 1 year
+      beta_min_observations: 100
+      winsorize: true
+      winsorize_percentiles: [1, 99]
+    
+    hyperparameters:
+      learning_rate: 2.0e-5
+      batch_size: 16
+      epochs: 3
+      warmup_steps: 500
+      weight_decay: 0.01
+      dropout: 0.1
+      max_grad_norm: 1.0
+    
+    optimization:
+      optimizer: "AdamW"
+      scheduler: "linear_with_warmup"
+      gradient_accumulation_steps: 2
+  
+  # Inference
+  inference:
+    batch_size: 32
+    device: "cuda"  # Use GPU if available
+    precision: "fp16"  # Mixed precision for speed
+    cache_embeddings: true
+
+# ============================================================================
+# SIGNAL GENERATION & PORTFOLIO CONSTRUCTION
+# ============================================================================
+signals:
+  # Sentiment signal
+  sentiment:
+    source: "smarty_bert"
+    normalization: "cross_sectional_rank"  # Rank-based
+    winsorize: true
+    winsorize_percentiles: [1, 99]
+  
+  # Portfolio formation
+  portfolio_formation:
+    method: "long_short"
+    
+    long_leg:
+      percentile: 90  # Top decile (10%)
+      min_stocks: 10
+      max_stocks: 500
+    
+    short_leg:
+      percentile: 10  # Bottom decile (10%)
+      min_stocks: 10
+      max_stocks: 500
+    
+    weighting:
+      method: "equal_weight"  # Equal-weighted within leg
+      alternative: "market_cap_weight"  # For robustness test
+    
+    neutrality:
+      dollar_neutral: true  # Equal capital to long/short
+      sector_neutral: true  # GICS Level 1
+      beta_neutral: false  # Optional constraint
+
+# ============================================================================
+# RISK MANAGEMENT
+# ============================================================================
+risk:
+  # Position limits
+  position_limits:
+    max_weight_per_stock: 0.02  # 2% within a leg
+    max_stocks_per_sector: 0.30  # 30% of leg in one sector
+    max_single_company_exposure: 0.01  # Absolute portfolio exposure
+  
+  # Sector neutrality
+  sector_neutrality:
+    enabled: true
+    gics_level: 1
+    max_deviation: 0.05  # 5% deviation from neutral
+  
+  # Exposure limits
+  exposure:
+    gross_exposure: 2.0  # 200% (100% long, 100% short)
+    net_exposure_target: 0.0
+    max_net_exposure: 0.10  # 10% max net
+  
+  # Drawdown control
+  drawdown:
+    max_drawdown_threshold: 0.15  # 15% from peak
+    action: "review_and_deleverage"
+    deleverage_factor: 0.5  # Reduce exposure by 50%
+  
+  # Stress tests
+  stress_scenarios:
+    - name: "COVID_Crash_2020"
+      start: "2020-03-01"
+      end: "2020-04-01"
+    
+    - name: "Financial_Crisis_2008"
+      start: "2008-09-01"
+      end: "2008-12-31"
+    
+    - name: "High_News_Volume"
+      description: "News volume spikes by 10x"
+      volume_multiplier: 10
+
+# ============================================================================
+# EXECUTION & TRANSACTION COSTS
+# ============================================================================
+execution:
+  # Rebalancing
+  rebalancing:
+    frequency: "daily"
+    time: "market_close"  # After 16:00 ET
+    order_type: "market_on_close"  # MOC orders
+    alternative: "limit_on_close"  # LOC for price improvement
+  
+  # Latency
+  latency:
+    signal_generation_time: "2 hours"  # LLM inference
+    assumption: "rebalance_next_day_open"
+  
+  # Transaction costs
+  transaction_costs:
+    large_cap:
+      commission_bps: 5  # One-way
+      slippage_bps: 5
+      total_bps: 10  # Round-trip
+    
+    small_cap:
+      commission_bps: 5
+      slippage_bps: 15  # Higher for illiquid stocks
+      total_bps: 20
+    
+    market_impact:
+      model: "square_root"
+      participation_rate: 0.10  # 10% of daily volume
+      sigma: 0.30  # Volatility parameter
+  
+  # Cost assumptions for backtest
+  backtest_costs:
+    conservative_bps: 30  # Conservative estimate
+    moderate_bps: 20
+    optimistic_bps: 10
+    default: "moderate_bps"
+
+# ============================================================================
+# BACKTESTING PARAMETERS
+# ============================================================================
+backtest:
+  initial_capital: 10000000  # $10M
+  
+  # Universe filters
+  filters:
+    survivorship_bias_control: true  # Include delisted returns
+    min_price: 5.0
+    min_market_cap_percentile: 10
+    min_liquidity: 100000  # Min daily dollar volume
+  
+  # Rebalancing
+  rebalance_frequency: "daily"
+  
+  # Costs
+  costs:
+    use_market_impact: true
+    transaction_cost_mode: "moderate_bps"
+  
+  # Monitoring
+  monitoring:
+    track_turnover: true
+    track_sector_exposure: true
+    track_sentiment_spread: true
+    alert_on_anomalies: true
+
+# ============================================================================
+# EVALUATION METRICS
+# ============================================================================
+evaluation:
+  # Primary metrics
+  primary_metrics:
+    - "annualized_return"
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "calmar_ratio"
+    - "max_drawdown"
+    - "win_rate"
+    - "turnover"
+  
+  # Benchmarks
+  benchmarks:
+    target_annualized_return: 0.3556  # 35.56% from paper
+    target_sharpe_ratio: 2.21  # From paper
+    market_benchmark: "SPY"
+    hedge_fund_benchmark: "HFRI_Equity_Market_Neutral"
+  
+  # Factor regression
+  factor_regression:
+    factors:
+      - "Mkt-RF"  # Market excess return
+      - "SMB"     # Size
+      - "HML"     # Value
+      - "RMW"     # Profitability
+      - "CMA"     # Investment
+      - "UMD"     # Momentum
+    
+    objective: "significant_alpha_low_loadings"
+    alpha_significance: 0.05
+  
+  # Statistical tests
+  statistical_tests:
+    t_test:
+      enabled: true
+      null_hypothesis: "mean_return_equals_zero"
+      alpha: 0.05
+    
+    newey_west:
+      enabled: true
+      lags: 12  # For autocorrelation-robust SE
+  
+  # Capacity analysis
+  capacity:
+    test_capital_levels:
+      - 10000000      # $10M
+      - 50000000      # $50M
+      - 100000000     # $100M
+      - 500000000     # $500M
+      - 1000000000    # $1B
+    
+    market_impact_scaling: "square_root"
+    estimate_capacity_threshold: 0.10  # 10% Sharpe degradation
+
+# ============================================================================
+# FAILURE MODES & MITIGATIONS
+# ============================================================================
+failure_modes:
+  # Rank 1: Model Decay / Signal Crowding
+  model_decay:
+    severity: "high"
+    likelihood: "medium_high"
+    mitigations:
+      - "Retrain LLM quarterly with recent data"
+      - "Monitor signal decay via rolling Sharpe"
+      - "Introduce proprietary data sources (e.g., alternative data)"
+      - "Blend with uncorrelated signals (fundamental factors)"
+      - "Track strategy correlation with competitors"
+    
+    monitoring:
+      rolling_sharpe_window: 90  # 3 months
+      alert_threshold: 0.5  # Alert if Sharpe < 0.5
+  
+  # Rank 2: Inadequate Cost Modeling
+  cost_modeling:
+    severity: "high"
+    likelihood: "high"
+    mitigations:
+      - "Use conservative cost assumptions (20-30 bps for small caps)"
+      - "Test value-weighted portfolio for lower turnover"
+      - "Implement sophisticated market impact model"
+      - "Track actual execution costs vs assumptions"
+      - "Reduce rebalancing frequency if needed"
+    
+    monitoring:
+      actual_vs_assumed_costs: true
+      turnover_threshold: 2.0  # 200% annual turnover
+  
+  # Rank 3: Data Snooping / Overfitting
+  overfitting:
+    severity: "high"
+    likelihood: "medium"
+    mitigations:
+      - "Strict time-series cross-validation (no forward-looking data)"
+      - "Hold-out final 2 years for out-of-sample validation"
+      - "Test on international markets (Europe, Asia)"
+      - "Use simple model architecture (avoid over-parameterization)"
+      - "Monitor validation vs test performance gap"
+    
+    validation:
+      out_of_sample_period: "2022-01-01 to 2023-12-31"
+      performance_gap_threshold: 0.20  # 20% degradation
+  
+  # Rank 4: LLM Operational Risk
+  llm_risk:
+    severity: "medium"
+    likelihood: "medium"
+    mitigations:
+      - "Maintain dictionary-based sentiment as fallback"
+      - "Monitor inference time and costs"
+      - "Scale compute resources (GPU clusters)"
+      - "Robust data pipelines for text ingestion"
+      - "Daily validation of text data quality"
+    
+    fallback_model:
+      type: "dictionary_based"
+      dictionaries:
+        - "Loughran-McDonald Financial Sentiment"
+        - "Harvard General Inquirer"
+  
+  # Rank 5: Regulatory & Sentiment Shift
+  regulatory_risk:
+    severity: "low_medium"
+    likelihood: "low"
+    mitigations:
+      - "Monitor short-selling regulations"
+      - "Model adapts via market-labeled training"
+      - "Track regime changes (correlation breaks)"
+      - "Geographic diversification"
+
+# ============================================================================
+# MONITORING & ALERTS
+# ============================================================================
+monitoring:
+  # Daily metrics
+  daily:
+    - "portfolio_return"
+    - "turnover"
+    - "sentiment_spread"  # Long - Short sentiment
+    - "sector_exposures"
+    - "text_data_volume"
+  
+  # Rolling metrics
+  rolling:
+    windows: [21, 63, 252]  # 1M, 3M, 1Y
+    metrics:
+      - "sharpe_ratio"
+      - "max_drawdown"
+      - "correlation_with_market"
+  
+  # Alerts
+  alerts:
+    sentiment_spread_narrowing:
+      threshold: 0.5  # Std deviations below mean
+      action: "investigate_alpha_decay"
+    
+    turnover_spike:
+      threshold: 3.0  # 3x normal turnover
+      action: "check_data_quality"
+    
+    news_volume_anomaly:
+      threshold: 10.0  # 10x normal volume
+      action: "verify_text_processing"
+    
+    drawdown_breach:
+      threshold: 0.15
+      action: "deleverage_and_review"
+
+# ============================================================================
+# OUTPUT & REPORTING
+# ============================================================================
+output:
+  results_dir: "output/"
+  
+  save_artifacts:
+    - "daily_positions.csv"
+    - "daily_returns.csv"
+    - "sentiment_scores.csv"
+    - "factor_exposures.csv"
+    - "transaction_costs.csv"
+  
+  reports:
+    - "performance_summary.pdf"
+    - "factor_regression.html"
+    - "capacity_analysis.csv"
+    - "failure_mode_checks.txt"
