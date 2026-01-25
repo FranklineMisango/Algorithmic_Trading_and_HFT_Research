@@ -1,0 +1,82 @@
+# Deep Learning for Delta-Neutral Options Trading Strategy Configuration
+# Based on Quant Radio transcript: LSTM model for S&P 100 straddle trading
+
+data:
+  # Data acquisition parameters
+  sp100_constituents: "data/sp100_constituents.csv"  # Point-in-time S&P 100 list
+  options_data_path: "data/options_data/"  # Directory for options data
+  underlying_data_path: "data/underlying_prices/"  # Directory for stock prices
+  start_date: "2010-01-01"
+  end_date: "2023-12-31"
+  min_volume: 100  # Minimum option volume threshold
+  min_open_interest: 50  # Minimum open interest threshold
+
+features:
+  # Feature engineering parameters
+  moneyness_bins: 10  # Bins for moneyness discretization
+  time_to_expiry_bins: 5  # Bins for time to expiry
+  lookback_window: 30  # Days of historical data for LSTM input
+  feature_list:
+    - moneyness
+    - time_to_expiry
+    - option_premium_normalized
+    - implied_volatility
+    - underlying_return_1d
+    - underlying_volatility_30d
+
+model:
+  # LSTM model hyperparameters
+  lstm_layers: 2
+  hidden_size: 64
+  dropout: 0.2
+  learning_rate: 0.001
+  batch_size: 32
+  epochs: 100
+  patience: 10  # Early stopping patience
+  turnover_penalty: 0.01  # Turnover regularization weight
+  sharpe_weight: 1.0  # Sharpe ratio optimization weight
+
+backtest:
+  # Backtesting parameters
+  initial_capital: 1000000
+  transaction_cost_per_contract: 0.01  # $0.01 per contract
+  bid_ask_spread: 0.02  # 2% bid-ask spread
+  slippage_model: "conservative"  # conservative, aggressive, none
+  rebalance_frequency: "daily"
+  max_position_size: 0.05  # Max % of capital per straddle
+  max_portfolio_delta: 0.1  # Max net delta exposure
+  max_portfolio_vega: 10000  # Max vega exposure
+  max_drawdown_stop: 0.20  # 20% drawdown halt
+
+benchmarks:
+  # Benchmark strategies to compare against
+  buy_and_hold_options: true
+  momentum_strategy: true
+  mean_reversion_strategy: true
+
+risk:
+  # Risk management rules
+  max_single_stock_exposure: 0.10  # Max % of capital per underlying
+  sector_neutral: true
+  max_leverage: 5.0
+  stress_test_periods:
+    - "2008-01-01"  # Financial crisis
+    - "2020-03-01"  # COVID crash
+
+evaluation:
+  # Performance evaluation metrics
+  primary_metric: "sharpe_ratio"
+  secondary_metrics:
+    - "total_return"
+    - "max_drawdown"
+    - "win_rate"
+    - "profit_factor"
+  statistical_tests:
+    - "diebold_mariano"  # Compare forecast accuracy
+  capacity_analysis: true  # Test with increasing capital
+
+logging:
+  # Logging configuration
+  level: "INFO"
+  file: "logs/deep_learning_options.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

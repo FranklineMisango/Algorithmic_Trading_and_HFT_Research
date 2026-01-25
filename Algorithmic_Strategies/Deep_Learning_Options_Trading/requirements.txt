@@ -1,0 +1,31 @@
+# Deep Learning Options Trading Strategy Requirements
+# Based on Quant Radio transcript implementation
+
+# Core data science and ML libraries
+pandas>=1.5.0
+numpy>=1.21.0
+scikit-learn>=1.2.0
+
+# Deep learning framework
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Data acquisition
+yfinance>=0.2.0
+requests>=2.28.0
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Configuration and utilities
+pyyaml>=6.0
+python-dateutil>=2.8.0
+
+# Optional: for advanced analysis
+scipy>=1.9.0
+statsmodels>=0.13.0
+
+# Development and testing
+jupyter>=1.0.0
+ipykernel>=6.0.0
