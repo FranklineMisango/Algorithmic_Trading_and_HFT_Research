@@ -1,0 +1,88 @@
+# Copy Congress Trading Strategy Configuration
+
+# Data Parameters
+data:
+  start_date: "2012-01-01"  # Post-STOCK Act
+  end_date: "2024-12-31"
+  lookback_period: 45  # Days for Congressional trade aggregation
+  filing_delay: 45  # Maximum days between transaction and filing
+  
+# Congressional Trade Signal
+signal:
+  lookback_days: 45  # Aggregate trades within this window
+  min_transaction_size: 1000  # Minimum $ value to include
+  use_filing_date: true  # Use filing date + 1 instead of transaction date
+  
+# Portfolio Construction
+portfolio:
+  rebalance_frequency: "W"  # Weekly rebalancing
+  min_holdings: 20  # Minimum number of positions
+  max_holdings: 50  # Maximum number of positions
+  max_position_size: 0.10  # Maximum 10% per security
+  max_sector_weight: 2.0  # 2x S&P 500 sector weight
+  
+# Weighting Scheme
+weighting:
+  method: "inverse_volatility"
+  volatility_lookback: 30  # Days for volatility calculation
+  min_volatility: 0.01  # Floor to prevent extreme weights
+  
+# Universe Filters
+universe:
+  min_price: 5.0  # Minimum share price
+  min_market_cap: 100000000  # $100M minimum
+  exchanges: ["NYSE", "NASDAQ"]
+  
+# Transaction Costs
+costs:
+  commission_bps: 5  # 5 basis points per trade
+  slippage_large_cap_bps: 5  # 5 bps for large cap
+  slippage_small_cap_bps: 10  # 10 bps for small/mid cap
+  large_cap_threshold: 10000000000  # $10B market cap
+  
+# Risk Management
+risk:
+  max_drawdown: 0.20  # 20% portfolio stop
+  position_stop_loss: 0.15  # 15% individual position stop
+  use_stops: true
+  stress_test_enabled: true
+  
+# Backtesting
+backtest:
+  initial_capital: 10000000  # $10M for capacity testing
+  benchmark: "SPY"  # S&P 500 benchmark
+  use_survivorship_bias_free: true
+  target_sharpe: 0.934  # Target from research
+  target_alpha: 0.03  # 3% annual alpha target
+  
+# Data Sources
+data_sources:
+  congressional_trades:
+    provider: "quiver"  # Quiver Quantitative or alternative
+    api_key_env: "QUIVER_API_KEY"
+  market_data:
+    provider: "yfinance"
+    backup: "alpaca"
+  
+# Feature Engineering
+features:
+  committee_weighting: true  # Weight trades by committee relevance
+  bipartisan_filter: true  # Flag consensus trades across parties
+  trade_size_normalization: true  # Normalize by avg daily volume
+  
+# Monitoring
+monitoring:
+  min_sharpe_threshold: 0.70  # Alert if Sharpe falls below
+  max_turnover: 2.0  # 200% annual turnover limit
+  correlation_check_enabled: true
+  capacity_monitoring: true
+  estimated_capacity: 75000000  # $75M estimated capacity
+  
+# Output
+output:
+  results_dir: "results"
+  figures_dir: "figures"
+  trades_dir: "trades"
+  save_positions: true
+  save_signals: true
+  save_trades: true
