@@ -1,0 +1,381 @@
+"""
+Pragmatic Asset Allocation Model - Main Pipeline
+Orchestrates the complete strategy execution from data acquisition to backtesting.
+"""
+
+import sys
+import argparse
+from pathlib import Path
+from datetime import datetime
+import yaml
+import logging
+from typing import Dict, Optional
+
+# Add current directory to path for imports
+sys.path.append('.')
+
+from data_acquisition import PragmaticAssetAllocationData
+from signal_generation import PragmaticAssetAllocationSignals
+from portfolio_construction import PragmaticAssetAllocationPortfolio
+from backtester import PragmaticAssetAllocationBacktester
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('pipeline.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class PragmaticAssetAllocationPipeline:
+    """
+    Main pipeline for Pragmatic Asset Allocation Model execution.
+    Coordinates all components from data to results.
+    """
+
+    def __init__(self, config_path: str = "config.yaml"):
+        """Initialize pipeline with configuration."""
+        self.config_path = config_path
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+
+        logger.info("Initialized Pragmatic Asset Allocation Pipeline")
+        logger.info(f"Strategy: {self.config['strategy']['name']}")
+        logger.info(f"Backtest period: {self.config['backtest']['start_date']} to {self.config['backtest']['end_date']}")
+
+    def run_data_acquisition(self, start_date: Optional[str] = None,
+                           end_date: Optional[str] = None) -> Dict:
+        """
+        Run data acquisition phase.
+
+        Args:
+            start_date: Override start date
+            end_date: Override end date
+
+        Returns:
+            Dictionary with acquired data
+        """
+        logger.info("=== PHASE 1: Data Acquisition ===")
+
+        try:
+            data_acquisition = PragmaticAssetAllocationData(self.config_path)
+
+            # Use provided dates or config defaults
+            if start_date is None:
+                start_date = self.config['backtest']['start_date']
+            if end_date is None:
+                end_date = self.config['backtest']['end_date']
+
+            logger.info(f"Fetching data from {start_date} to {end_date}")
+
+            # Fetch all required data
+            all_data = data_acquisition.fetch_all_data(start_date, end_date)
+
+            # Validate data quality
+            validation_results = data_acquisition.validate_data_quality(all_data)
+
+            logger.info("Data acquisition completed")
+            for data_type, is_valid in validation_results.items():
+                status = "✓ Valid" if is_valid else "⚠ Invalid"
+                logger.info(f"  {data_type}: {status}")
+
+            return all_data
+
+        except Exception as e:
+            logger.error(f"Data acquisition failed: {str(e)}")
+            raise
+
+    def run_signal_generation(self, data_dict: Dict) -> Dict:
+        """
+        Run signal generation phase.
+
+        Args:
+            data_dict: Data from acquisition phase
+
+        Returns:
+            Dictionary with generated signals
+        """
+        logger.info("=== PHASE 2: Signal Generation ===")
+
+        try:
+            signal_generation = PragmaticAssetAllocationSignals(self.config_path)
+
+            # Generate all signals
+            signals_dict = signal_generation.generate_all_signals(data_dict)
+
+            # Log signal generation summary
+            logger.info("Signal generation completed")
+            for signal_type, df in signals_dict.items():
+                if not df.empty:
+                    logger.info(f"  {signal_type}: {len(df)} signals generated")
+                else:
+                    logger.warning(f"  {signal_type}: No signals generated")
+
+            return signals_dict
+
+        except Exception as e:
+            logger.error(f"Signal generation failed: {str(e)}")
+            raise
+
+    def run_portfolio_construction(self, signals_dict: Dict, data_dict: Dict) -> Dict:
+        """
+        Run portfolio construction phase.
+
+        Args:
+            signals_dict: Signals from generation phase
+            data_dict: Data from acquisition phase
+
+        Returns:
+            Dictionary with portfolio construction results
+        """
+        logger.info("=== PHASE 3: Portfolio Construction ===")
+
+        try:
+            portfolio_construction = PragmaticAssetAllocationPortfolio(self.config_path)
+
+            # Combine price data
+            risky_assets = data_dict.get('risky_assets', pd.DataFrame())
+            hedging_assets = data_dict.get('hedging_assets', pd.DataFrame())
+
+            if risky_assets.empty:
+                raise ValueError("No risky assets data available")
+
+            # Combine all price data
+            all_price_data = risky_assets.copy()
+            if not hedging_assets.empty:
+                all_price_data = pd.concat([all_price_data, hedging_assets], axis=1)
+
+            # Run portfolio construction
+            portfolio_results = portfolio_construction.run_portfolio_construction(
+                signals_dict, all_price_data
+            )
+
+            logger.info("Portfolio construction completed")
+            if 'portfolio_history' in portfolio_results:
+                history = portfolio_results['portfolio_history']
+                logger.info(f"  Portfolio history: {len(history)} rebalance dates")
+                logger.info(f"  Final portfolio value: ${history['portfolio_value'].iloc[-1]:,.2f}")
+
+            return portfolio_results
+
+        except Exception as e:
+            logger.error(f"Portfolio construction failed: {str(e)}")
+            raise
+
+    def run_backtesting(self, signals_dict: Dict, data_dict: Dict,
+                       portfolio_results: Dict) -> Dict:
+        """
+        Run backtesting phase.
+
+        Args:
+            signals_dict: Signals from generation phase
+            data_dict: Data from acquisition phase
+            portfolio_results: Portfolio construction results
+
+        Returns:
+            Dictionary with backtest results
+        """
+        logger.info("=== PHASE 4: Backtesting ===")
+
+        try:
+            backtester = PragmaticAssetAllocationBacktester(self.config_path)
+
+            # Combine price data for backtesting
+            risky_assets = data_dict.get('risky_assets', pd.DataFrame())
+            hedging_assets = data_dict.get('hedging_assets', pd.DataFrame())
+
+            all_price_data = risky_assets.copy()
+            if not hedging_assets.empty:
+                all_price_data = pd.concat([all_price_data, hedging_assets], axis=1)
+
+            # Run backtest
+            backtest_results = backtester.run_backtest(
+                signals_dict, all_price_data, portfolio_results
+            )
+
+            # Log key results
+            if 'performance_metrics' in backtest_results:
+                metrics = backtest_results['performance_metrics']
+                logger.info("Backtesting completed")
+                logger.info(f"  Total Return: {metrics.get('total_return', 0):.2%}")
+                logger.info(f"  Annual Return: {metrics.get('annual_return', 0):.2%}")
+                logger.info(f"  Sharpe Ratio: {metrics.get('sharpe_ratio', 0):.2f}")
+                logger.info(f"  Max Drawdown: {metrics.get('max_drawdown', 0):.2%}")
+
+                # Check against targets
+                targets = self.config['backtest']['targets']
+                if metrics.get('sharpe_ratio', 0) >= targets['sharpe_ratio']:
+                    logger.info("  ✓ Sharpe ratio meets or exceeds target")
+                else:
+                    logger.warning("  ⚠ Sharpe ratio below target")
+
+            # Generate performance report
+            backtester.generate_performance_report(backtest_results, "results")
+
+            return backtest_results
+
+        except Exception as e:
+            logger.error(f"Backtesting failed: {str(e)}")
+            raise
+
+    def run_full_pipeline(self, start_date: Optional[str] = None,
+                         end_date: Optional[str] = None) -> Dict:
+        """
+        Run the complete Pragmatic Asset Allocation pipeline.
+
+        Args:
+            start_date: Override start date
+            end_date: Override end date
+
+        Returns:
+            Dictionary with complete pipeline results
+        """
+        logger.info("🚀 Starting Pragmatic Asset Allocation Pipeline")
+        start_time = datetime.now()
+
+        try:
+            # Phase 1: Data Acquisition
+            data_dict = self.run_data_acquisition(start_date, end_date)
+
+            # Phase 2: Signal Generation
+            signals_dict = self.run_signal_generation(data_dict)
+
+            # Phase 3: Portfolio Construction
+            portfolio_results = self.run_portfolio_construction(signals_dict, data_dict)
+
+            # Phase 4: Backtesting
+            backtest_results = self.run_backtesting(signals_dict, data_dict, portfolio_results)
+
+            # Compile final results
+            pipeline_results = {
+                'pipeline_info': {
+                    'execution_time': str(datetime.now() - start_time),
+                    'config_file': self.config_path,
+                    'start_date': start_date or self.config['backtest']['start_date'],
+                    'end_date': end_date or self.config['backtest']['end_date']
+                },
+                'data': data_dict,
+                'signals': signals_dict,
+                'portfolio': portfolio_results,
+                'backtest': backtest_results
+            }
+
+            logger.info("✅ Pipeline completed successfully!")
+            logger.info(f"Execution time: {datetime.now() - start_time}")
+
+            return pipeline_results
+
+        except Exception as e:
+            logger.error(f"❌ Pipeline failed: {str(e)}")
+            raise
+
+    def run_quick_analysis(self, backtest_results: Optional[Dict] = None) -> None:
+        """
+        Run quick analysis of results.
+
+        Args:
+            backtest_results: Backtest results to analyze
+        """
+        if backtest_results is None:
+            # Try to load from results directory
+            results_file = Path("results/backtest_results.json")
+            if results_file.exists():
+                import json
+                with open(results_file, 'r') as f:
+                    backtest_results = json.load(f)
+            else:
+                logger.error("No backtest results available for analysis")
+                return
+
+        logger.info("=== QUICK ANALYSIS ===")
+
+        # Extract key metrics
+        metrics = backtest_results.get('performance_metrics', {})
+        benchmarks = backtest_results.get('benchmark_results', {})
+
+        print("
+Strategy Performance:")
+        print(".2%")
+        print(".2%")
+        print(".2f")
+        print(".2%")
+
+        # Benchmark comparison
+        if benchmarks:
+            print("
+Benchmark Comparison:")
+            for bench_name, bench_data in benchmarks.items():
+                bench_sharpe = bench_data.get('sharpe_ratio', 0)
+                strategy_sharpe = metrics.get('sharpe_ratio', 0)
+                outperformance = strategy_sharpe - bench_sharpe
+                print(".2f")
+
+        # Risk assessment
+        targets = self.config['backtest']['targets']
+        if metrics.get('sharpe_ratio', 0) >= targets['sharpe_ratio']:
+            print("
+✅ SUCCESS: Strategy meets Sharpe ratio target"        else:
+            print("
+⚠️ CAUTION: Strategy below Sharpe ratio target"
+
+        print("
+=== ANALYSIS COMPLETE ===")
+
+def main():
+    """Main entry point for command-line execution."""
+    parser = argparse.ArgumentParser(description='Pragmatic Asset Allocation Model Pipeline')
+    parser.add_argument('--mode', choices=['full', 'data', 'signals', 'portfolio', 'backtest', 'analyze'],
+                       default='full', help='Pipeline execution mode')
+    parser.add_argument('--start-date', help='Override start date (YYYY-MM-DD)')
+    parser.add_argument('--end-date', help='Override end date (YYYY-MM-DD)')
+    parser.add_argument('--config', default='config.yaml', help='Configuration file path')
+
+    args = parser.parse_args()
+
+    try:
+        # Initialize pipeline
+        pipeline = PragmaticAssetAllocationPipeline(args.config)
+
+        if args.mode == 'full':
+            # Run complete pipeline
+            results = pipeline.run_full_pipeline(args.start_date, args.end_date)
+            pipeline.run_quick_analysis(results.get('backtest'))
+
+        elif args.mode == 'data':
+            # Data acquisition only
+            data_dict = pipeline.run_data_acquisition(args.start_date, args.end_date)
+            logger.info(f"Data acquisition completed. Keys: {list(data_dict.keys())}")
+
+        elif args.mode == 'signals':
+            # Data + signals
+            data_dict = pipeline.run_data_acquisition(args.start_date, args.end_date)
+            signals_dict = pipeline.run_signal_generation(data_dict)
+            logger.info(f"Signal generation completed. Keys: {list(signals_dict.keys())}")
+
+        elif args.mode == 'portfolio':
+            # Full pipeline up to portfolio construction
+            data_dict = pipeline.run_data_acquisition(args.start_date, args.end_date)
+            signals_dict = pipeline.run_signal_generation(data_dict)
+            portfolio_results = pipeline.run_portfolio_construction(signals_dict, data_dict)
+            logger.info("Portfolio construction completed")
+
+        elif args.mode == 'backtest':
+            # Full pipeline
+            results = pipeline.run_full_pipeline(args.start_date, args.end_date)
+            logger.info("Backtesting completed")
+
+        elif args.mode == 'analyze':
+            # Quick analysis of existing results
+            pipeline.run_quick_analysis()
+
+        logger.info("Pipeline execution completed successfully")
+
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

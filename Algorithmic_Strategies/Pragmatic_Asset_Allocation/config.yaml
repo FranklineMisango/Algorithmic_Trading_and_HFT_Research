@@ -1,0 +1,136 @@
+# Pragmatic Asset Allocation Model Configuration
+# Based on Quant Radio transcript - Global Tactical Asset Allocation with Momentum and Risk Filters
+
+strategy:
+  name: "Pragmatic Asset Allocation Model"
+  description: "GTAA strategy combining momentum, trend-following, and macroeconomic hedging signals"
+  objective: "Solid risk-adjusted returns with quarterly tranched rebalancing"
+
+# Asset Universe
+assets:
+  risky:
+    - name: "NASDAQ 100"
+      ticker: "QQQ"
+      proxy: "NASDAQ-100"  # For historical data
+    - name: "MSCI World"
+      ticker: "URTH"
+      proxy: "MSCI-World"
+    - name: "MSCI Emerging Markets"
+      ticker: "EEM"
+      proxy: "MSCI-EM"
+
+  hedging:
+    - name: "10-Year US Treasury"
+      ticker: "IEF"
+      proxy: "US-10Y-Treasury"
+    - name: "Gold"
+      ticker: "GLD"
+      proxy: "GOLD"
+
+# Signal Parameters
+signals:
+  momentum:
+    lookback_months: 12
+    ranking_method: "total_return"
+    selection_count: 2  # Top 2 performers
+
+  trend_filter:
+    lookback_months: 12
+    ma_type: "SMA"  # Simple Moving Average
+    condition: "price > ma"  # Must be above MA to invest
+
+  market_health:
+    downtrend_threshold: 2  # If 2+ risky assets in downtrend, allocate to cash
+    cash_allocation_pct: 0.5  # Portion to allocate to cash (not specified in transcript)
+
+  yield_curve:
+    short_term: "3M"  # 3-month T-bill
+    long_term: "10Y"   # 10-year treasury
+    inversion_trigger: true  # Full cash if inverted
+    persistence_months: 1    # Require inversion to persist (robustness)
+
+  stop_loss:
+    enabled: true
+    level_pct: 0.15  # 15% stop loss (conservative estimate)
+    evaluation: "quarterly"  # Only at quarterly rebalance
+
+# Portfolio Construction
+portfolio:
+  tranches: 4  # Divide portfolio into 4 equal parts
+  rebalance_frequency: "quarterly"
+  min_holding_period: 12  # months
+  weighting: "equal"  # Equal weight within baskets
+
+  allocation:
+    risky_basket_pct: 0.6  # Risky vs hedging split (estimated)
+    hedging_basket_pct: 0.4
+    hedging_split:  # Bonds vs Gold
+      bonds: 0.5
+      gold: 0.5
+
+# Transaction Costs & Slippage
+costs:
+  etf_trading_cost_bps: 5  # 5 bps for liquid ETFs
+  illiquid_penalty_bps: 10  # Additional 10 bps for EM
+  slippage_bps: 5  # 5 bps slippage
+  total_cost_bps: 10  # Total round-trip cost estimate
+
+# Backtest Parameters
+backtest:
+  start_date: "1927-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  benchmark: "60/40"  # 60% S&P 500, 40% bonds for comparison
+
+  # Performance targets from transcript
+  targets:
+    annual_return: 0.1073  # 10.73%
+    sharpe_ratio: 0.93
+    max_drawdown: 0.24  # 24%
+
+# Risk Management
+risk:
+  max_allocation_per_asset: 0.25  # Max 25% per asset
+  sector_neutrality: false  # Not required
+  volatility_target: null  # No leverage
+  max_leverage: 1.0  # No leverage
+
+# Data Sources
+data:
+  price_data_source: "yfinance"  # Primary source
+  macro_data_source: "fred"      # Federal Reserve Economic Data
+  fallback_sources: ["yahoo", "alpha_vantage"]
+
+  # Data quality checks
+  quality_checks:
+    survivorship_bias_control: true
+    data_completeness_threshold: 0.95
+    outlier_detection: true
+
+# Model Validation
+validation:
+  walk_forward_windows: 5  # 5-year rolling windows
+  out_of_sample_period: "2020-01-01"  # Post-2020 for OOS testing
+  statistical_tests:
+    - "sharpe_ratio_significance"
+    - "maximum_drawdown_analysis"
+    - "regime_stability"
+
+# Reporting
+reporting:
+  metrics:
+    - "annualized_return"
+    - "annualized_volatility"
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "maximum_drawdown"
+    - "calmar_ratio"
+    - "win_rate"
+    - "profit_factor"
+
+  charts:
+    - "portfolio_value"
+    - "drawdown_chart"
+    - "rolling_sharpe"
+    - "asset_allocation"
+    - "signal_performance"
