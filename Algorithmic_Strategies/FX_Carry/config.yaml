@@ -1,0 +1,70 @@
+# FX Carry Strategy Configuration
+
+strategy:
+  name: "FX_Carry"
+  description: "Currency carry trade based on interest rate differentials"
+  target_volatility: 0.10
+  rebalance_frequency: "weekly"
+  
+data:
+  start_date: "2005-01-01"
+  end_date: null  # null means current date
+  
+  # Currency pairs (base/quote format)
+  currency_pairs:
+    - "AUDJPY"  # High yielder vs low yielder
+    - "NZDJPY"
+    - "AUDUSD"
+    - "NZDUSD"
+    - "EURUSD"
+    - "GBPUSD"
+    - "USDJPY"
+    - "USDCHF"
+    - "USDCAD"
+    - "EURJPY"
+    
+  # Data sources
+  spot_rates_source: "yfinance"  # Yahoo Finance for FX
+  interest_rates_source: "fred"  # FRED for policy rates
+  
+signals:
+  # Interest rate differential carry
+  carry_lookback: 252  # 1 year for IR differential calculation
+  
+  # Z-score parameters
+  zscore_window: 252
+  entry_threshold: 1.0
+  exit_threshold: 0.5
+  
+  # Factor neutralization
+  neutralize_factors:
+    - "dollar_index"  # Remove USD beta
+    - "safe_haven"    # Remove flight-to-quality beta
+    - "commodity_fx"  # Remove commodity correlation
+    
+portfolio:
+  # Position sizing
+  weighting_scheme: "inverse_volatility"
+  vol_lookback: 63  # ~3 months for vol estimation
+  
+  # Risk limits
+  max_position_size: 0.15  # Max 15% per pair
+  max_sector_exposure: 0.40  # Max 40% to any region
+  
+  # Leverage
+  gross_leverage: 2.0
+  net_leverage: 1.0
+  
+backtesting:
+  # Transaction costs
+  bid_ask_spread_bps: 3  # 3 bps for majors
+  
+  # Performance metrics
+  benchmark: "USD_INDEX"
+  risk_free_rate: "US_3M_TBILL"
+  
+  # Stress scenarios
+  stress_periods:
+    - ["2008-09-01", "2009-03-01"]  # GFC
+    - ["2020-03-01", "2020-04-01"]  # COVID crash
+    - ["2022-02-01", "2022-12-31"]  # Ukraine/inflation
