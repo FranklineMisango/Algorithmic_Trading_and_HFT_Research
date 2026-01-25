@@ -1,0 +1,79 @@
+# Statistical Arbitrage with Reinforcement Learning Configuration
+
+data:
+  universe: "SP500"  # S&P 500 constituent stocks
+  start_date: "2020-01-01"
+  train_start: "2022-01-01"
+  train_end: "2022-12-31"
+  test_start: "2023-01-01"
+  test_end: "2023-12-31"
+  frequency: "1d"  # Daily data
+  vendor: "yfinance"  # Can switch to polygon, alpaca, etc.
+
+pair_selection:
+  method: "grid_search"  # Grid search to minimize EMRT
+  sectors:
+    - "Technology"
+    - "Healthcare"
+    - "Consumer Goods"
+    - "Financials"
+  min_correlation: 0.7  # Minimum historical correlation for candidate pairs
+  lookback_window: 252  # Trading days for correlation calculation
+  max_pairs: 10  # Maximum number of pairs to trade
+  emrt_percentile: 10  # Select pairs in bottom 10th percentile of EMRT
+
+emrt:
+  calculation_window: 126  # 6 months for EMRT calculation
+  deviation_threshold: 2.0  # Standard deviations for mean reversion event
+  max_reversion_days: 60  # Maximum days to wait for reversion
+
+rl_agent:
+  state_features:
+    - "price_spread"
+    - "spread_zscore"
+    - "spread_momentum"
+    - "volume_ratio"
+    - "sector_momentum"
+  actions: ["buy", "sell", "hold"]  # Discrete action space
+  algorithm: "DQN"  # Deep Q-Network
+  learning_rate: 0.001
+  gamma: 0.99  # Discount factor
+  epsilon_start: 1.0
+  epsilon_end: 0.01
+  epsilon_decay: 0.995
+  batch_size: 64
+  memory_size: 10000
+  target_update_frequency: 10  # Episodes
+  episodes: 500
+  
+portfolio:
+  initial_capital: 100000
+  max_position_size: 0.1  # 10% of capital per pair leg
+  position_sizing: "dollar_neutral"  # Equal dollar long/short
+  rebalance_frequency: "daily"
+  max_leverage: 2.0
+
+risk_management:
+  max_drawdown: 0.15  # 15% maximum drawdown
+  stop_loss_pct: 0.05  # 5% stop loss per pair
+  position_limit_per_pair: 0.2  # 20% of capital per pair
+  correlation_threshold: 0.5  # Exit if correlation drops below
+  volatility_scaling: true
+  max_holding_period: 30  # Days
+
+execution:
+  order_type: "market"
+  slippage_bps: 5  # 5 basis points
+  commission_bps: 10  # 10 basis points per trade
+  market_impact_model: "linear"  # Linear price impact
+
+evaluation:
+  metrics:
+    - "total_return"
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "win_rate"
+    - "profit_factor"
+  benchmark: "SPY"
+  confidence_level: 0.95
