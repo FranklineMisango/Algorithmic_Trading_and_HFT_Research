@@ -1,0 +1,163 @@
+# Canadian Bond Day Count Arbitrage Strategy Configuration
+
+# Strategy Parameters
+strategy:
+  name: "Canadian_Bond_Day_Count_Arbitrage"
+  version: "1.0.0"
+  description: "Exploit day count convention mismatch in Canadian Government bonds"
+
+# Bond Universe Filters
+universe:
+  country: "Canada"
+  issuer_type: "Government"
+  min_maturity_years: 1.0
+  max_maturity_years: 30.0
+  exclude_callable: true
+  exclude_strips: true
+  coupon_frequency: "semi-annual"  # Canadian government bonds are semi-annual
+
+# Signal Generation
+signals:
+  # Target coupon period lengths that create arbitrage opportunities
+  target_coupon_periods: [181, 182]
+  
+  # Days before coupon payment to enter position
+  entry_window_days: 5
+  min_entry_days: 1  # Minimum days before coupon to still enter
+  
+  # Minimum theoretical profit threshold (in basis points)
+  min_profit_bps: 0.5
+  
+  # Duration matching tolerance
+  duration_match_tolerance: 0.05  # 5% tolerance on PV01 matching
+
+# Risk Management
+risk:
+  # Position sizing
+  max_single_position_pct: 2.0  # Maximum 2% per arbitrage trade
+  max_total_exposure_pct: 10.0  # Maximum 10% total across all positions
+  
+  # Stop loss parameters
+  max_hedge_slippage_pct: 10.0  # Kill switch if hedge slippage > 10% of target profit
+  max_execution_slippage_bps: 5.0  # Maximum acceptable slippage
+  
+  # Trade limits
+  max_concurrent_trades: 5
+  min_days_between_same_bond: 90  # Avoid repeated trades on same bond
+
+# Execution Parameters
+execution:
+  order_type: "limit"  # Never use market orders
+  limit_order_buffer_bps: 0.5  # Buffer for limit orders
+  max_order_wait_minutes: 30  # Cancel order if not filled
+  
+  # Settlement
+  settlement_convention: "T+1"  # Canadian bond settlement
+  
+  # Slippage assumptions
+  base_slippage_bps: 2.0
+  market_impact_factor: 0.0001  # Additional slippage per $1M notional
+
+# Transaction Costs
+costs:
+  commission_pct: 0.05  # 5 basis points per trade (institutional rate)
+  financing_rate_spread_bps: 10.0  # Cost of financing the position
+  custody_fee_bps: 1.0  # Annual custody fee (pro-rated)
+
+# Duration Hedging
+hedging:
+  method: "pv01_matching"  # PV01-based duration hedging
+  rebalance_frequency: "daily"
+  
+  # Eligible hedge instruments (in order of preference)
+  hedge_instruments:
+    - "CAD_GOVT_BONDS"  # Other Canadian government bonds
+    - "CANADIAN_BOND_FUTURES"  # CGB futures
+  
+  # Hedge construction
+  min_hedge_bonds: 3  # Use at least 3 bonds for diversification
+  max_single_hedge_weight: 0.4  # No single hedge > 40%
+
+# Data Sources
+data_sources:
+  primary:
+    provider: "bloomberg"
+    fields:
+      - "PX_DIRTY"  # Dirty price
+      - "PX_CLEAN"  # Clean price
+      - "YLD_YTM_MID"  # Yield to maturity
+      - "DUR_ADJ_MID"  # Modified duration
+      - "INT_ACC"  # Accrued interest
+      - "NXT_CPN_DT"  # Next coupon date
+      - "PREV_CPN_DT"  # Previous coupon date
+      - "CPN"  # Coupon rate
+    
+  alternative:
+    provider: "bank_of_canada"
+    endpoint: "https://www.bankofcanada.ca/valet/"
+  
+  update_frequency: "daily"  # Minimum daily EOD
+  intraday_required: true  # For live execution
+
+# Backtesting Parameters
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000  # $1M starting capital
+  
+  # Control test parameters
+  run_control_test: true
+  control_periods: [180, 183, 184]  # Non-arbitrage coupon periods
+  
+  # Performance benchmarks
+  benchmark: "FTSE_Canada_Universe_Bond_Index"
+  risk_free_rate: "CAD_3M_TBILL"
+
+# Validation & Monitoring
+validation:
+  # Statistical tests
+  min_sample_size: 20  # Minimum trades for statistical significance
+  confidence_level: 0.95
+  
+  # Performance monitoring
+  track_metrics:
+    - "win_rate"
+    - "avg_profit_bps"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "execution_slippage"
+    - "hedge_tracking_error"
+  
+  # Alert thresholds
+  alerts:
+    win_rate_below: 0.85
+    avg_profit_below_bps: 0.5
+    slippage_above_bps: 5.0
+
+# Logging & Reporting
+logging:
+  level: "INFO"
+  log_dir: "logs/"
+  trade_log: "trade_log.csv"
+  performance_log: "performance_log.csv"
+  
+reporting:
+  frequency: "daily"
+  include_pnl: true
+  include_risk_metrics: true
+  export_format: "csv"
+
+# Advanced Features
+advanced:
+  # Use machine learning for execution timing optimization
+  ml_execution_timing: false
+  
+  # Monitor for strategy crowding
+  track_bid_ask_spreads: true
+  spread_threshold_bps: 10.0  # Alert if spreads widen significantly
+  
+  # Regulatory monitoring
+  monitor_regulatory_changes: true
+  regulatory_sources:
+    - "IIROC"  # Investment Industry Regulatory Organization of Canada
+    - "Bank_of_Canada"
