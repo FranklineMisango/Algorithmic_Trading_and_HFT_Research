@@ -1,0 +1,79 @@
+# Holiday Effect Trading Strategy Configuration
+
+strategy:
+  name: "Holiday Effect - Amazon"
+  description: "Calendar-based strategy capturing pre-event momentum around Black Friday and Prime Day"
+  type: "event_driven"
+
+data:
+  primary_ticker: "AMZN"
+  benchmark_ticker: "SPY"
+  start_date: "1998-01-01"
+  end_date: "2024-12-31"
+  frequency: "1d"
+  vendor: "yfinance"
+
+events:
+  black_friday:
+    description: "Friday after 4th Thursday in November"
+    lookback_days: 10  # Trading days before event
+    exit_timing: "day_before"  # Exit before event day
+    
+  prime_day:
+    description: "Amazon Prime Day (mid-July)"
+    # Historical Prime Day dates (approximate, may need manual adjustment)
+    dates:
+      2015: "2015-07-15"
+      2016: "2016-07-12"
+      2017: "2017-07-11"
+      2018: "2018-07-16"
+      2019: "2019-07-15"
+      2020: "2020-10-13"  # Delayed due to COVID
+      2021: "2021-06-21"
+      2022: "2022-07-12"
+      2023: "2023-07-11"
+      2024: "2024-07-16"
+    lookback_days: 10
+    exit_timing: "day_before"
+
+portfolio:
+  initial_capital: 1000000
+  position_sizing: "full_capital"  # 100% allocation during events
+  leverage: 1.0  # Cash-only, no leverage
+  max_positions: 1
+
+execution:
+  order_type: "market_on_open"
+  slippage_bps: 5  # 5 basis points
+  commission_bps: 15  # 15 basis points
+  
+risk_management:
+  stop_loss_pct: 0.08  # 8% trailing stop
+  market_filter: "ma_200"  # Only trade when SPY > 200-day MA
+  vix_threshold: 25  # Only trade when VIX < 25
+  
+options_strategy:
+  enabled: true
+  instrument: "put"
+  direction: "sell"
+  moneyness: "otm"  # Out of the money
+  strike_offset_pct: 0.05  # 5% below current price
+  dte_range: [7, 14]  # Days to expiration: 7-14 days
+  max_allocation_pct: 0.05  # Max 5% of capital to options
+  
+evaluation:
+  metrics:
+    - "total_return"
+    - "sharpe_ratio"
+    - "win_rate"
+    - "max_drawdown"
+    - "annualized_return"
+  benchmark: "SPY"
+  target_sharpe: 0.5  # Target Sharpe > 0.5
+  significance_level: 0.05
+  
+backtest:
+  walk_forward: true
+  oos_split_year: 2010  # Use 1998-2010 for discovery, 2011+ for validation
+  validation_start: 2011
+  holdout_start: 2019
