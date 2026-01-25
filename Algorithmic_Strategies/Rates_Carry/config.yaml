@@ -1,0 +1,75 @@
+# Rates Carry Strategy Configuration
+
+strategy:
+  name: "Rates_Carry"
+  description: "Government bond carry based on roll-down yield"
+  target_volatility: 0.10
+  rebalance_frequency: "weekly"
+  
+data:
+  start_date: "2005-01-01"
+  end_date: null
+  
+  # Government bond maturities (years)
+  maturities:
+    - 2
+    - 5
+    - 7
+    - 10
+    - 30
+    
+  # Countries
+  countries:
+    - "US"
+    - "Germany"
+    - "UK"
+    - "Japan"
+    - "Australia"
+    - "Canada"
+    
+  # Data sources
+  yields_source: "fred"
+  prices_source: "yfinance"  # Bond ETFs as proxy
+  
+signals:
+  # Roll-down yield calculation
+  roll_period: 63  # 3 months roll-down
+  
+  # Z-score parameters
+  zscore_window: 252
+  entry_threshold: 1.0
+  exit_threshold: 0.5
+  
+  # Factor neutralization
+  neutralize_factors:
+    - "duration"  # Interest rate duration
+    - "curve_slope"  # Yield curve steepness
+    - "flight_to_quality"  # Safe-haven flows
+    
+portfolio:
+  # Position sizing
+  weighting_scheme: "inverse_volatility"
+  vol_lookback: 63
+  
+  # Risk limits
+  max_position_size: 0.20
+  max_duration: 7.0  # Max portfolio duration
+  
+  # Leverage
+  gross_leverage: 3.0
+  net_leverage: 1.0
+  
+backtesting:
+  # Transaction costs
+  transaction_cost_bps: 5  # 5 bps per trade
+  
+  # Performance metrics
+  benchmark: "AGG"  # Bloomberg Aggregate Bond Index
+  risk_free_rate: "US_3M_TBILL"
+  
+  # Stress scenarios
+  stress_periods:
+    - ["2008-09-01", "2009-03-01"]  # GFC
+    - ["2013-05-01", "2013-09-01"]  # Taper tantrum
+    - ["2020-03-01", "2020-04-01"]  # COVID crash
+    - ["2022-01-01", "2022-12-31"]  # Rate hiking cycle
