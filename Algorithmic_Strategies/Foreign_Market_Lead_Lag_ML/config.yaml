@@ -1,0 +1,169 @@
+strategy:
+  name: "Foreign Market Lead-Lag ML"
+  version: "1.0.0"
+  
+data:
+  # Target universe
+  target_universe: "SPY"  # S&P 500 constituents
+  start_date: "2010-01-01"
+  end_date: "2024-12-31"
+  
+  # Foreign markets (47 markets - using major MSCI country ETFs as proxies)
+  foreign_markets:
+    - "EWJ"   # Japan
+    - "EWG"   # Germany
+    - "EWU"   # UK
+    - "EWC"   # Canada
+    - "EWA"   # Australia
+    - "EWH"   # Hong Kong
+    - "EWS"   # Singapore
+    - "EWW"   # Mexico
+    - "EWZ"   # Brazil
+    - "EZA"   # South Africa
+    - "EWI"   # Italy
+    - "EWP"   # Spain
+    - "EWQ"   # France
+    - "EWL"   # Switzerland
+    - "EWN"   # Netherlands
+    - "EWD"   # Sweden
+    - "EWK"   # Belgium
+    - "EWZS"  # Switzerland
+    - "EWO"   # Austria
+    - "EPOL"  # Poland
+    - "EWT"   # Taiwan
+    - "EWY"   # South Korea
+    - "EIDO"  # Indonesia
+    - "EIRL"  # Ireland
+    - "EIS"   # Israel
+    - "THD"   # Thailand
+    - "ENZL"  # New Zealand
+    - "ECH"   # Chile
+    - "EPU"   # Peru
+    - "ARGT"  # Argentina
+    - "TUR"   # Turkey
+    - "RSX"   # Russia
+    - "EWM"   # Malaysia
+    - "EPHE"  # Philippines
+    - "EGPT"  # Egypt
+    - "QAT"   # Qatar
+    - "KSA"   # Saudi Arabia
+    - "UAE"   # UAE
+    - "GREK"  # Greece
+    - "EWP"   # Portugal
+    - "NORW"  # Norway
+    - "FXI"   # China
+    - "INDA"  # India
+    - "VNM"   # Vietnam
+    - "EWZ"   # Colombia
+    - "EDEN"  # Denmark
+    - "EWL"   # Finland
+  
+  # Data frequency
+  weekly_frequency: "W-FRI"  # Weekly Friday closes
+  
+features:
+  # Lag parameters
+  lags: [1, 2, 3, 4]  # weeks
+  
+  # Feature engineering
+  standardize: true  # Cross-sectional standardization
+  winsorize: true
+  winsorize_limits: [0.01, 0.99]
+  
+  # Signal aggregation
+  use_market_level: true   # 188 signals (47 markets * 4 lags)
+  use_stock_level: false   # ~13,000 signals (adds noise per research)
+
+models:
+  # Model selection (Lasso performed best in research)
+  primary_model: "lasso"
+  
+  # Model configurations
+  lasso:
+    alpha: 0.01
+    max_iter: 10000
+    selection: "random"
+  
+  random_forest:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 20
+  
+  gradient_boosting:
+    n_estimators: 100
+    learning_rate: 0.01
+    max_depth: 5
+  
+  neural_network:
+    hidden_layers: [64, 32, 16]
+    activation: "relu"
+    dropout: 0.2
+    epochs: 50
+    batch_size: 32
+
+validation:
+  # Strict out-of-sample testing
+  method: "walk_forward"
+  train_years: 5
+  test_years: 1
+  min_train_samples: 260  # ~1 year of weekly data
+  
+  # Performance metrics
+  metrics:
+    - "r2_oos"
+    - "information_coefficient"
+    - "sharpe_ratio"
+    - "max_drawdown"
+
+portfolio:
+  # Long/short construction
+  long_percentile: 95   # Top 5%
+  short_percentile: 5   # Bottom 5%
+  
+  # Position sizing
+  equal_weight: true
+  dollar_neutral: true
+  
+  # Rebalancing
+  rebalance_frequency: "daily"
+  
+  # Risk management
+  max_position_size: 0.05  # 5% of portfolio
+  max_sector_exposure: 0.30  # 30% per sector
+
+costs:
+  # Transaction costs (conservative institutional estimates)
+  commission: 0.001  # 10 bps per trade
+  slippage: 0.0005   # 5 bps market impact
+  
+  # Borrowing costs for short positions
+  short_borrow_rate: 0.005  # 50 bps annually
+
+risk_management:
+  # Stop-loss triggers
+  max_quarterly_loss: -0.15  # -15%
+  max_drawdown: -0.25        # -25%
+  
+  # Monitoring thresholds
+  min_r2_oos: 0.01           # Minimum predictive power
+  min_sharpe: 0.5            # Minimum risk-adjusted return
+  
+  # Stress test scenarios
+  stress_test: true
+  crisis_periods:
+    - ["2020-02-01", "2020-04-30"]  # COVID-19
+
+backtesting:
+  initial_capital: 1000000
+  benchmark: "SPY"
+  
+  # Performance reporting
+  report_frequency: "monthly"
+  save_trades: true
+  save_positions: true
+
+output:
+  results_dir: "results"
+  models_dir: "models"
+  data_dir: "data"
+  log_level: "INFO"
