@@ -1,0 +1,57 @@
+currencies:
+  advanced:
+    - EUR
+    - JPY
+    - GBP
+    - CAD
+    - AUD
+    - CHF
+    - SEK
+    - NOK
+    - NZD
+  emerging:
+    - BRL
+    - CNY
+    - INR
+    - MXN
+    - ZAR
+    - TRY
+    - RUB
+    - KRW
+
+anchor_currency: USD
+
+# Signal Parameters
+lookback_months: 6
+rate_threshold_percentile: 80  # Top 20% (highest quintile)
+fx_threshold_percentile: 33    # Bottom 33% (lowest tertile)
+crash_threshold_percentile: 4  # Bottom 4%
+
+# Backtest Parameters
+start_date: "1999-01-01"
+end_date: "2023-12-31"
+in_sample_end: "2018-12-31"
+out_sample_start: "2019-01-01"
+
+# Position Management
+position_duration_months: 6
+max_country_exposure: 0.10  # 10% of capital
+leverage: 1.5
+
+# Transaction Costs (bps)
+transaction_costs:
+  advanced: 7.5  # 5-10 bps
+  emerging: 20.0  # 15-25 bps
+
+slippage:
+  advanced: 4.0  # 3-5 bps
+  emerging: 12.5  # 10-15 bps
+
+# Risk Management
+global_vix_filter: 40  # Pause strategy if VIX > 40
+stop_loss_pct: 0.05  # 5% trailing stop (optional)
+
+# Data Sources
+data_sources:
+  fx_rates: "yfinance"  # or "fred", "bloomberg"
+  interest_rates: "fred"  # Federal Reserve Economic Data

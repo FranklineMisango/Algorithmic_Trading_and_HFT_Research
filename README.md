@@ -95,6 +95,7 @@ Algorithmic_Trading_and_HFT_Research/
 │   ├── Futures_Prediction_ML/       # Order book ML prediction
 │   ├── Put_Futures_Spread_Arb/      # Options arbitrage
 │   ├── DP_Ratio_Market_Timing/      # Dividend-price ratio OLS strategy
+│   ├── Currency_Crash_Prediction/   # FX crash early warning system
 │   └── Leveraged_Index_Funds/       # Index fund strategies
 ├── Deep_Learning_Momentum/          # Deep learning momentum ranking
 ├── Market_Making/                   # Market making models
@@ -308,7 +309,37 @@ cd Algorithmic_Strategies/DP_Ratio_Market_Timing
 python main.py
 ```
 
-#### 7. Perpetual Futures Funding Rate Arbitrage
+#### 7. Currency Crash Prediction Model
+**Location**: `Algorithmic_Strategies/Currency_Crash_Prediction/`
+
+Early warning system for short-term currency crashes using domestic economic stress indicators. Identifies "Red Zone" (R-Zone) conditions where aggressive interest rate tightening into existing currency weakness dramatically increases crash probability.
+
+**Key Features**:
+- R-Zone signal: Top 20% rate hikes + Bottom 33% currency weakness
+- 6-month lookback for feature calculation
+- Crash probability: ~43% in R-Zone vs ~7.8% baseline
+- Average lead time: 4-5 months before crash
+- Coverage: 17 economies (9 advanced, 8 emerging)
+
+**Performance Metrics**:
+- Crash Detection Accuracy: 43% within 6 months
+- False Positive Rate: 57%
+- Probability Ratio: 5.5x baseline
+
+**Economic Rationale**: Aggressive central bank rate hike into an already weak currency signals desperation and severe underlying stress (inflation, capital flight), triggering loss of confidence and accelerating capital outflows leading to nonlinear crash.
+
+**Tech Stack**: pandas, numpy, scipy, statsmodels, yfinance, pandas_datareader, LEAN
+
+**Usage**:
+```bash
+cd Algorithmic_Strategies/Currency_Crash_Prediction
+python data_fetcher.py --start 1999-01-01 --end 2023-12-31
+python signal_generator.py
+# OR
+jupyter notebook notebooks/01_data_exploration.ipynb
+```
+
+#### 8. Perpetual Futures Funding Rate Arbitrage
 **Location**: `Algorithmic_Strategies/Perp_Futures_Funding_Arbitrage/`
 
 Cross-market statistical arbitrage exploiting funding rate inefficiencies in cryptocurrency perpetual futures contracts using clamp-adjusted no-arbitrage bounds.
@@ -609,6 +640,7 @@ All strategies track standard quantitative metrics:
 7. Campbell & Shiller (1988) - "The Dividend-Price Ratio and Expectations"
 8. Fama & French (1988) - "Dividend Yields and Expected Stock Returns"
 9. "Arbitrage in Perpetual Crypto Contracts" - Quant Radio (Funding rate arbitrage with clamping)
+10. "Interest Rates and Short Term Currency Crash Risk" - Quant Radio (R-Zone currency crash prediction)
 
 ## Contributing
 
