@@ -1,0 +1,79 @@
+# ML Mean Reversion Strategy Configuration
+
+strategy:
+  name: "ML Mean Reversion - Russell 3000"
+  version: "1.0"
+  
+# Entry Signal Parameters
+signals:
+  qpi_threshold: 15              # QPI < 15 for long, > 85 for short
+  ml_probability_threshold: 0.60 # ML probability > 60%
+  
+# Position Management
+positions:
+  max_long: 20                   # Maximum 20 long positions
+  max_short: 20                  # Maximum 20 short positions
+  holding_period_days: 6         # Exit after 6 trading days
+  
+# VIX Regime Filter
+vix_filter:
+  sma_window: 15                 # 15-day SMA of VIX
+  threshold_multiplier: 1.15     # Bear market if VIX > SMA * 1.15
+  
+# Allocation by Regime
+allocation:
+  bull_market:
+    long: 1.1                    # 110% long allocation
+    short: 0.2                   # 20% short allocation
+  bear_market:
+    long: 0.1                    # 10% long allocation
+    short: 0.2                   # 20% short allocation
+    
+# Risk Management
+risk:
+  stop_loss_pct: 0.05           # 5% stop loss
+  min_price: 1.0                # Minimum stock price ($1.00)
+  max_position_pct_adv: 0.05    # Max 5% of average daily volume
+  
+# Backtesting
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  transaction_cost_bps: 5        # 5 basis points per trade
+  slippage_bps: 10               # 10 basis points slippage
+  
+# Data
+data:
+  universe: "Russell 3000"
+  resolution: "Daily"
+  min_history_days: 30
+  
+# ML Model
+model:
+  type: "GradientBoostingClassifier"
+  n_estimators: 100
+  max_depth: 4
+  learning_rate: 0.1
+  train_test_split: 0.8
+  retrain_frequency_days: 90     # Retrain every quarter
+  
+# Features
+features:
+  - qpi_3day
+  - rsi_14
+  - bb_position
+  - volume_surge
+  - mom_5
+  - mom_10
+  - mom_20
+  - vol_ratio
+  
+# Expected Performance (from Quant Radio)
+expected_performance:
+  annual_return: 0.274           # 27.4%
+  sharpe_ratio: 1.17
+  max_drawdown: 0.46             # 46%
+  win_rate: 0.62                 # 62%
+  avg_return_per_trade: 0.005    # 0.5%
+  payoff_ratio: 0.79
