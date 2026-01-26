@@ -1,0 +1,31 @@
+strategy:
+  name: "EMD_Strategic_Allocation"
+  allocation_pct: 0.10  # 10% of portfolio to EMD
+  local_hard_split: [0.6, 0.4]  # 60% local, 40% hard currency
+  rebalance_frequency: "quarterly"
+  
+signals:
+  ppp_zscore_threshold: -0.5  # Long if Z < -0.5
+  ppp_window_years: 10
+  yield_spread_percentile: 60  # Top 60th percentile
+  
+risk:
+  max_country_weight: 0.05  # 5% cap per country
+  min_credit_rating: "B-"
+  fx_vol_hedge_trigger: 0.20  # 20% annualized
+  hedge_ratio: 0.50
+  vix_reduction_trigger: 35
+  max_correlation_alert: 0.6
+  min_spread_alert: 300  # bps
+  
+costs:
+  local_currency_bps: 30
+  hard_currency_bps: 25
+  slippage_bps: 10
+  
+backtest:
+  start_date: "2003-01-01"
+  end_date: "2023-12-31"
+  in_sample_end: "2012-12-31"
+  benchmark: "60/40"
+  initial_capital: 1000000
