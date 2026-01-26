@@ -1,0 +1,67 @@
+strategy:
+  name: "Perpetual Futures Funding Arbitrage"
+  version: "1.0.0"
+  
+parameters:
+  # Clamping factor (5 bps per Binance specs)
+  delta: 0.0005
+  
+  # Transaction fees (bps)
+  spot_fee: 0.00009  # 0.9 bps each way for maker
+  perp_fee: 0.0      # 0 bps for maker
+  
+  # Funding interval (hours)
+  funding_interval: 8
+  
+  # Position sizing
+  max_volatility_pct: 0.02  # 2% annualized vol per position
+  max_positions: 4
+  
+  # Risk management
+  stop_loss_bps: 10  # 10 bps beyond entry bound
+  max_spread_multiplier: 2.0
+  min_volume_usd: 5000000  # $5M
+  
+  # Execution
+  latency_ms: 100
+  max_slippage_bps: 5
+
+assets:
+  - symbol: "BTCUSDT"
+    perp_symbol: "BTCUSDT"
+    spot_symbol: "BTCUSDT"
+    contract_type: "linear"
+  - symbol: "ETHUSDT"
+    perp_symbol: "ETHUSDT"
+    spot_symbol: "ETHUSDT"
+    contract_type: "linear"
+
+data:
+  source: "binance"
+  frequency: "1h"
+  lookback_days: 730  # 2 years
+  
+  # API endpoints
+  perp_endpoint: "https://fapi.binance.com"
+  spot_endpoint: "https://api.binance.com"
+  
+backtest:
+  initial_capital: 100000
+  start_date: "2022-01-01"
+  end_date: "2024-01-01"
+  
+  # Split
+  train_end: "2023-01-01"
+  test_start: "2023-01-01"
+  
+  # Slippage model
+  slippage_model: "linear"
+  slippage_factor: 2.0
+
+risk_free_rate:
+  source: "fred"  # Federal Reserve Economic Data
+  ticker: "DGS3MO"  # 3-month T-Bill
+
+crypto_borrow_rate:
+  source: "binance"
+  endpoint: "/sapi/v1/margin/interestRateHistory"

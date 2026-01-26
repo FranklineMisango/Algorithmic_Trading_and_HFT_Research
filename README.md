@@ -308,6 +308,35 @@ cd Algorithmic_Strategies/DP_Ratio_Market_Timing
 python main.py
 ```
 
+#### 7. Perpetual Futures Funding Rate Arbitrage
+**Location**: `Algorithmic_Strategies/Perp_Futures_Funding_Arbitrage/`
+
+Cross-market statistical arbitrage exploiting funding rate inefficiencies in cryptocurrency perpetual futures contracts using clamp-adjusted no-arbitrage bounds.
+
+**Key Features**:
+- Clamp-adjusted no-arbitrage bounds (5 bps clamping factor)
+- Dynamic bound calculation with transaction fees and interest rates
+- Delta-neutral cash-and-carry arbitrage
+- Multi-asset support (BTC, ETH perpetuals)
+- Comprehensive stress testing framework
+
+**Performance Targets**:
+- Sharpe Ratio: >1.5
+- Max Drawdown: <10%
+- Win Rate: >60%
+
+**Economic Rationale**: The clamping function in funding rate mechanisms creates a "dead zone" where small deviations aren't corrected, leading to wider no-arbitrage bounds than traditional models suggest. When the perp/spot ratio moves outside these bounds, cash-and-carry arbitrage becomes profitable.
+
+**Tech Stack**: ccxt, python-binance, numpy, pandas, scipy
+
+**Usage**:
+```bash
+cd Algorithmic_Strategies/Perp_Futures_Funding_Arbitrage
+python main.py --config config.yaml
+# OR
+jupyter notebook notebooks/01_data_exploration.ipynb
+```
+
 ### Market Making Models
 
 #### 1. Avellaneda-Stoikov Model
@@ -574,11 +603,12 @@ All strategies track standard quantitative metrics:
 1. Taki & Lee (2013) - "Applying Deep Learning to Enhance Momentum Trading"
 2. Avellaneda & Stoikov (2008) - "High-frequency trading in a limit order book"
 3. Grossman & Miller (1988) - "Liquidity and Market Structure"
-4. Jegadeesh & Titman (1993) - "Returns to Bu
+4. Jegadeesh & Titman (1993) - "Returns to Buying Winners and Selling Losers"
+5. Graham (1949) - "The Intelligent Investor"
 6. "Can Dividend-Price Ratio Predict Stock Return?" (1927-2017) - D/P ratio predictability study
 7. Campbell & Shiller (1988) - "The Dividend-Price Ratio and Expectations"
-8. Fama & French (1988) - "Dividend Yields and Expected Stock Returns"ying Winners and Selling Losers"
-5. Graham (1949) - "The Intelligent Investor"
+8. Fama & French (1988) - "Dividend Yields and Expected Stock Returns"
+9. "Arbitrage in Perpetual Crypto Contracts" - Quant Radio (Funding rate arbitrage with clamping)
 
 ## Contributing
 
