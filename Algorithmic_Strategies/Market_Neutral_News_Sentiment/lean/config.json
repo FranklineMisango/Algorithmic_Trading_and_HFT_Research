@@ -1,0 +1,9 @@
+{
+  "algorithm-language": "Python",
+  "parameters": {
+    "long_pct": "0.2",
+    "short_pct": "0.2",
+    "net_exposure": "0.0"
+  },
+  "description": "Market-neutral news sentiment strategy with daily rebalancing"
+}

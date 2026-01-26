@@ -1,0 +1,47 @@
+strategy:
+  name: "Market-Neutral News Sentiment"
+  type: "long_short_equity"
+  holding_period_days: 1
+  rebalance_frequency: "daily"
+
+signal:
+  epsilon: 1.0e-9
+  relevance_threshold: 0.7
+  lookback_hours: 24
+
+portfolio:
+  long_percentile: 0.2
+  short_percentile: 0.2
+  net_exposure: 0.0  # 0.0 for market-neutral, 0.1 for 10% net long
+  sp1500_shorts_only: true
+  max_position_weight: 0.02
+  max_sector_exposure: 0.20
+
+model:
+  type: "linear_regression"
+  alpha: 1.0  # Ridge regularization
+  training_years: 10
+  refit_frequency: "annual"
+
+costs:
+  transaction_cost_bps: 12.5
+  slippage_bps: 7.5
+  borrow_cost_bps: 50  # Annual short borrow cost
+
+risk:
+  max_drawdown_threshold: 0.15
+  stop_loss_enabled: true
+  position_limit_per_stock: 0.02
+  sector_limit: 0.20
+
+backtest:
+  start_date: "2013-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  benchmark: "SPY"
+
+data:
+  news_vendor: "dow_jones"
+  price_source: "alpaca"
+  universe: "russell_3000"
+  sector_classification: "gics"
