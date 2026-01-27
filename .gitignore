@@ -91,3 +91,4 @@ Thumbs.db
 .env
 secrets.yaml
 api_keys.yaml
+config.json
