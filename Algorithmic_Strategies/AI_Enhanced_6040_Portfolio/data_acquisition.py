@@ -50,7 +50,8 @@ class DataAcquisition:
             tickers,
             start=self.start_date,
             end=self.end_date,
-            progress=False
+            progress=False,
+            auto_adjust=False
         )
         
         # Extract adjusted close prices
@@ -81,12 +82,19 @@ class DataAcquisition:
             vix_ticker,
             start=self.start_date,
             end=self.end_date,
-            progress=False
+            progress=False,
+            auto_adjust=False
         )
         
-        vix = vix_data['Adj Close']
-        vix.name = 'VIX'
+        if isinstance(vix_data, pd.DataFrame):
+            vix = vix_data['Adj Close'] if 'Adj Close' in vix_data.columns else vix_data['Close']
+        else:
+            vix = vix_data
         
+        if isinstance(vix, pd.DataFrame):
+            vix = vix.squeeze()
+        
+        vix.name = 'VIX'
         return vix
     
     def fetch_yield_spread(self) -> pd.Series:
@@ -106,7 +114,8 @@ class DataAcquisition:
             [long_term, short_term],
             start=self.start_date,
             end=self.end_date,
-            progress=False
+            progress=False,
+            auto_adjust=False
         )
         
         # Calculate spread
@@ -150,9 +159,18 @@ class DataAcquisition:
                 '^TNX',
                 start=self.start_date,
                 end=self.end_date,
-                progress=False
+                progress=False,
+                auto_adjust=False
             )
-            rate = treasury['Adj Close']
+            
+            if isinstance(treasury, pd.DataFrame):
+                rate = treasury['Adj Close'] if 'Adj Close' in treasury.columns else treasury['Close']
+            else:
+                rate = treasury
+            
+            if isinstance(rate, pd.DataFrame):
+                rate = rate.squeeze()
+            
             rate.name = 'Interest_Rate'
         
         return rate
