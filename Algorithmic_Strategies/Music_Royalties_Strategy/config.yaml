@@ -203,7 +203,7 @@ metrics:
   - "avg_holding_period"
   
   # Statistical tests
-  statistical_tests:
+statistical_tests:
     - name: "ttest_vs_zero"
       description: "Test if returns significantly > 0"
     - name: "ttest_vs_benchmark"
