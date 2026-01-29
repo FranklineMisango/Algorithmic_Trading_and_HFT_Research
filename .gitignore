@@ -92,3 +92,4 @@ Thumbs.db
 secrets.yaml
 api_keys.yaml
 config.json
+*.config.yaml
