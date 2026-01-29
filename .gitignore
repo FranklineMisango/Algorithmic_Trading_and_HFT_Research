@@ -20,6 +20,10 @@
 *.swo
 *.csv
 
+# API keys and sensitive config
+config.yaml
+**/config.yaml
+
 /.qodo/
 /data/
 *.pyc

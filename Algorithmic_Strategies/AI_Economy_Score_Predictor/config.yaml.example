@@ -1,4 +1,5 @@
 # AI Economy Score Predictor Strategy Configuration
+# This is an example configuration file. Copy it to config.yaml and add your API keys.
 
 # Data Sources
 data:
