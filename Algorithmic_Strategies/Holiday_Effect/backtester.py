@@ -71,7 +71,8 @@ class Backtester:
         signals_aligned = signals.loc[common_dates]
         
         for date in common_dates:
-            current_price = prices_aligned.loc[date, 'Adj Close']
+            price_col = 'Adj Close' if 'Adj Close' in prices_aligned.columns else 'Close'
+            current_price = prices_aligned.loc[date, price_col]
             signal = signals_aligned.loc[date, 'in_window']
             
             # Track daily position
@@ -133,7 +134,8 @@ class Backtester:
         # Final liquidation if holding position
         if shares > 0:
             final_date = common_dates[-1]
-            final_price = prices_aligned.loc[final_date, 'Adj Close']
+            price_col = 'Adj Close' if 'Adj Close' in prices_aligned.columns else 'Close'
+            final_price = prices_aligned.loc[final_date, price_col]
             trade_value = shares * final_price
             transaction_costs = self.calculate_transaction_costs(trade_value)
             
@@ -252,7 +254,8 @@ class Backtester:
         """
         # Align dates
         strategy_dates = strategy_results['portfolio'].index
-        benchmark_aligned = benchmark_prices.loc[strategy_dates, 'Adj Close']
+        price_col = 'Adj Close' if 'Adj Close' in benchmark_prices.columns else 'Close'
+        benchmark_aligned = benchmark_prices.loc[strategy_dates, price_col]
         
         # Calculate benchmark returns
         benchmark_returns = benchmark_aligned.pct_change().dropna()

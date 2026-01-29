@@ -50,8 +50,13 @@ class DataAcquisition:
             ticker,
             start=start_date,
             end=end_date,
+            auto_adjust=False,
             progress=False
         )
+        
+        # Flatten MultiIndex columns if present
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
         
         return data
     
@@ -83,8 +88,13 @@ class DataAcquisition:
             '^VIX',
             start=start_date,
             end=end_date,
+            auto_adjust=False,
             progress=False
         )
+        
+        # Flatten MultiIndex columns if present
+        if isinstance(vix_data.columns, pd.MultiIndex):
+            vix_data.columns = vix_data.columns.get_level_values(0)
         
         return vix_data['Close']
     
@@ -109,14 +119,15 @@ class DataAcquisition:
         
         amzn_aligned = amzn_data.loc[common_dates]
         spy_aligned = spy_data.loc[common_dates]
-        vix_aligned = vix_data.reindex(common_dates).fillna(method='ffill')
+        vix_aligned = vix_data.reindex(common_dates).ffill()
         
         # Calculate returns
         amzn_returns = self.calculate_returns(amzn_aligned)
         spy_returns = self.calculate_returns(spy_aligned)
         
         # Calculate 200-day MA for SPY (market filter)
-        spy_ma200 = spy_aligned['Adj Close'].rolling(window=200).mean()
+        price_col = 'Adj Close' if 'Adj Close' in spy_aligned.columns else 'Close'
+        spy_ma200 = spy_aligned[price_col].rolling(window=200).mean()
         
         dataset = {
             'amzn_prices': amzn_aligned,
@@ -167,8 +178,8 @@ if __name__ == "__main__":
     print("\n=== Dataset Summary ===")
     print(f"Date range: {dataset['start_date']} to {dataset['end_date']}")
     print(f"Trading days: {dataset['trading_days']}")
-    print(f"\nAMZN price range: ${dataset['amzn_prices']['Adj Close'].min():.2f} - ${dataset['amzn_prices']['Adj Close'].max():.2f}")
-    print(f"SPY price range: ${dataset['spy_prices']['Adj Close'].min():.2f} - ${dataset['spy_prices']['Adj Close'].max():.2f}")
+    print(f"\nAMZN price range: ${dataset['amzn_prices']['Adj Close' if 'Adj Close' in dataset['amzn_prices'].columns else 'Close'].min():.2f} - ${dataset['amzn_prices']['Adj Close' if 'Adj Close' in dataset['amzn_prices'].columns else 'Close'].max():.2f}")
+    print(f"SPY price range: ${dataset['spy_prices']['Adj Close' if 'Adj Close' in dataset['spy_prices'].columns else 'Close'].min():.2f} - ${dataset['spy_prices']['Adj Close' if 'Adj Close' in dataset['spy_prices'].columns else 'Close'].max():.2f}")
     
     # Split data
     discovery, validation, holdout = data_acq.split_data(dataset['amzn_prices'])
