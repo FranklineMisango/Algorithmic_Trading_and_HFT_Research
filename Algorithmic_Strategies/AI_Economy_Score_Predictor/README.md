@@ -9,7 +9,8 @@ An advanced macroeconomic prediction strategy that uses Large Language Models (L
 - **Type**: Macroeconomic Prediction / Cross-Asset Sentiment Alpha
 - **Frequency**: Quarterly (aligned with earnings seasons)
 - **Universe**: S&P 500 stocks (transcripts) → Industry ETFs or S&P 500 futures (trading)
-- **Backtest Period**: 2016-2023 (training 2006-2015)
+- **Backtest Period**: 2021-2025 (training 2015-2020)
+- **Data Volume**: ~20,000 transcripts (500 companies × 4 quarters × 10 years)
 - **Research Results**: Beat Survey of Professional Forecasters; GDP predictions accurate 1-4 quarters ahead, IP/employment/wages accurate up to 10 quarters ahead
 
 ## Core Hypothesis
@@ -150,15 +151,24 @@ IP_{k,t+h} = α + β_k × IND_{k,t} + ε
 ## Data Requirements
 
 ### Primary Data
-1. **Earnings Transcripts**: S&P Capital IQ, Bloomberg, Seeking Alpha, AlphaSense
-2. **Macroeconomic**: FRED (GDP, INDPRO, PAYEMS, CES wages)
-3. **SPF Consensus**: Philadelphia Fed Survey of Professional Forecasters
-4. **Market Data**: CRSP/Compustat for fundamentals, ETF holdings
+1. **Earnings Transcripts**: **FREE via Hugging Face** 🎉
+   - **Source**: `kurry/sp500_earnings_transcripts` (Hugging Face dataset)
+   - **Period**: 2005-2025 (20 years available, using 2015-2025)
+   - **Volume**: ~20,000 transcripts (500 companies × 4 quarters × 10 years)
+   - **Training Set**: 2015-2020 (~12,000 transcripts)
+   - **Test Set**: 2021-2025 (~10,000 transcripts)
+   - **Access**: `pip install datasets` + `huggingface-cli login` (free account)
+   - **Alternative Paid Sources**: S&P Capital IQ, Bloomberg, Seeking Alpha (~$1,200-20,000/year)
+2. **Macroeconomic**: FRED (GDP, INDPRO, PAYEMS, CES wages) - FREE
+3. **SPF Consensus**: Philadelphia Fed Survey of Professional Forecasters - FREE
+4. **Market Data**: Yahoo Finance (free) or CRSP/Compustat (institutional)
 
 ### LLM Access
 - **Preferred**: OpenAI GPT-4 API
 - **Alternatives**: Anthropic Claude-3-Opus, local Llama-3-70B
 - **Cost**: ~$0.01-0.03 per transcript (GPT-4)
+- **Total LLM Cost**: ~$200-600 for 20,000 transcripts (one-time processing)
+- **Budget Option**: Use GPT-4o-mini (~$0.001/transcript) = ~$20 total
 
 ## Implementation Notes
 

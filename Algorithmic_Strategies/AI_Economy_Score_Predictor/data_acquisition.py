@@ -1,14 +1,21 @@
 """
-Data Acquisition Module - Real Data via FRED API
+Data Acquisition Module - Real Data via FRED API + Hugging Face Transcripts
 """
 
 import pandas as pd
 import yaml
-from typing import Dict, List
+from typing import Dict, List, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
 from fredapi import Fred
+
+try:
+    from datasets import load_dataset
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+    print("Warning: datasets library not installed. Install with: pip install datasets")
 
 
 class DataAcquisition:
@@ -22,6 +29,76 @@ class DataAcquisition:
         fred_key = self.config['data']['macro'].get('fred_api_key')
         self.fred = Fred(api_key=fred_key)
         print(f"✓ FRED API initialized")
+    
+    def fetch_earnings_transcripts(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Fetch earnings call transcripts from Hugging Face dataset.
+        
+        Dataset: kurry/sp500_earnings_transcripts (2005-2025)
+        
+        Returns:
+            DataFrame with columns: symbol, date, transcript_text, company_name, etc.
+        """
+        if not HF_AVAILABLE:
+            raise ImportError("datasets library required. Install: pip install datasets")
+        
+        print(f"Fetching transcripts from Hugging Face (kurry/sp500_earnings_transcripts)...")
+        print("Using streaming mode to avoid disk space issues...")
+        
+        # Use STREAMING mode to avoid downloading entire dataset
+        from datasets import load_dataset
+        
+        # Stream the dataset without caching
+        dataset = load_dataset("kurry/sp500_earnings_transcripts", split="train", streaming=True)
+        
+        # Convert dates for filtering
+        start_ts = pd.Timestamp(start_date)
+        end_ts = pd.Timestamp(end_date)
+        
+        # Load S&P 500 symbols for filtering
+        sp500 = self.fetch_sp500_constituents()
+        sp500_symbols = set(sp500['Symbol'].tolist())
+        
+        # Stream and filter data
+        print("Streaming and filtering transcripts (this may take a few minutes)...")
+        filtered_records = []
+        count = 0
+        
+        for record in dataset:
+            count += 1
+            if count % 1000 == 0:
+                print(f"  Processed {count} records, kept {len(filtered_records)}...")
+            
+            # Filter by date
+            if 'date' in record:
+                record_date = pd.Timestamp(record['date'])
+                if not (start_ts <= record_date <= end_ts):
+                    continue
+            
+            # Filter by S&P 500 membership
+            symbol = record.get('symbol') or record.get('ticker')
+            if symbol and symbol not in sp500_symbols:
+                continue
+            
+            filtered_records.append(record)
+        
+        df = pd.DataFrame(filtered_records)
+        print(f"✓ Loaded {len(df)} transcripts from Hugging Face (streamed {count} total records)")
+        
+        # Filter by date range
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+            print(f"✓ Filtered to {len(df)} transcripts between {start_date} and {end_date}")
+        
+        # Filter for S&P 500 constituents if symbol column exists
+        sp500 = self.fetch_sp500_constituents()
+        if 'symbol' in df.columns or 'ticker' in df.columns:
+            symbol_col = 'symbol' if 'symbol' in df.columns else 'ticker'
+            df = df[df[symbol_col].isin(sp500['Symbol'])]
+            print(f"✓ Filtered to {len(df)} S&P 500 transcripts")
+        
+        return df
     
     def fetch_sp500_constituents(self) -> pd.DataFrame:
         """Load S&P 500 constituents from local file."""

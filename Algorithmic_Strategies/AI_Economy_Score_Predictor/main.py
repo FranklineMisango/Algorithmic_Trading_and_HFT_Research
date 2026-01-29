@@ -34,9 +34,9 @@ class AIEconomyPipeline:
         # Step 1: Data acquisition
         print("\nSTEP 1: DATA ACQUISITION")
         sp500 = self.data_acq.fetch_sp500_constituents()
-        macro = self.data_acq.fetch_macro_data('2006-01-01', '2023-12-31')
-        controls = self.data_acq.fetch_control_variables('2006-01-01', '2023-12-31')
-        spf = self.data_acq.fetch_spf_forecasts('2006-01-01', '2023-12-31')
+        macro = self.data_acq.fetch_macro_data('2015-01-01', '2025-12-31')
+        controls = self.data_acq.fetch_control_variables('2015-01-01', '2025-12-31')
+        spf = self.data_acq.fetch_spf_forecasts('2015-01-01', '2025-12-31')
         
         print(f"Loaded {len(sp500)} companies, {len(macro)} indicators")
         
