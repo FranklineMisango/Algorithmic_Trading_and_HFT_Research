@@ -2,7 +2,9 @@
 Main Pipeline for AI Economy Score Predictor Strategy
 """
 
+import os
 import yaml
+from dotenv import load_dotenv
 from data_acquisition import DataAcquisition
 from llm_scorer import LLMScorer
 from feature_engineering import FeatureEngineer
@@ -10,13 +12,19 @@ from prediction_model import PredictionModel
 from signal_generator import SignalGenerator
 from backtester import Backtester
 
+# Load environment variables
+load_dotenv()
+
 
 class AIEconomyPipeline:
     """Complete pipeline orchestration."""
     
     def __init__(self, config_path: str = "config.yaml"):
         with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+            config_content = f.read()
+            # Expand environment variables in config
+            config_content = os.path.expandvars(config_content)
+            self.config = yaml.safe_load(config_content)
         
         self.data_acq = DataAcquisition(config_path)
         self.llm_scorer = LLMScorer(config_path)

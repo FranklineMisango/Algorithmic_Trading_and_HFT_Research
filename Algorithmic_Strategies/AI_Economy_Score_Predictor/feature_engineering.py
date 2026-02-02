@@ -49,9 +49,16 @@ class FeatureEngineer:
         df = scores.copy()
         
         if method == 'zscore':
-            # Rolling mean and std
-            rolling_mean = df[score_column].rolling(window=window, min_periods=4).mean()
-            rolling_std = df[score_column].rolling(window=window, min_periods=4).std()
+            # Use expanding window if we have fewer samples than window size
+            # This ensures we can normalize even with limited data (e.g., TEST_MODE)
+            if len(df) < window:
+                print(f"  Using expanding window (only {len(df)} samples, window={window})")
+                rolling_mean = df[score_column].expanding(min_periods=2).mean()
+                rolling_std = df[score_column].expanding(min_periods=2).std()
+            else:
+                # Rolling mean and std
+                rolling_mean = df[score_column].rolling(window=window, min_periods=4).mean()
+                rolling_std = df[score_column].rolling(window=window, min_periods=4).std()
             
             # Z-score
             df[f'{score_column}_norm'] = (

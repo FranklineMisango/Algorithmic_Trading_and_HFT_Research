@@ -12,7 +12,7 @@ data:
     
   # Macroeconomic indicators
   macro:
-    fred_api_key: "YOUR_FRED_API_KEY_HERE"  # Get from https://fred.stlouisfed.org/docs/api/api_key.html
+    fred_api_key: "${FRED_API_KEY}"  # Get from https://fred.stlouisfed.org/docs/api/api_key.html
     indicators:
       gdp:
         series_id: "GDP"
@@ -40,24 +40,24 @@ data:
 llm:
   provider: "openai"  # Options: openai, anthropic, local
   model: "gpt-4o-mini"  # gpt-4, gpt-3.5-turbo, claude-3-opus, llama-3-70b
-  api_key: "YOUR_OPENAI_API_KEY_HERE"  # Get from https://platform.openai.com/api-keys
+  api_key: "${OPENAI_API_KEY}"  # Get from https://platform.openai.com/api-keys
   # Scoring prompt
   prompt_template: |
     You are an expert economic analyst. Analyze the following excerpt from a company's earnings call transcript.
     
     Focus on the management's outlook regarding the **US economy** specifically.
     
-    Rate the company's economic outlook on the following scale:
-    5 - Increase Substantially (Very positive outlook for US economy)
-    4 - Increase Moderately (Somewhat positive outlook)
-    3 - No Change (Neutral outlook)
-    2 - Decrease Moderately (Somewhat negative outlook)
-    1 - Decrease Substantially (Very negative outlook)
+    Rate the company's economic outlook on this scale:
+    5 - Very positive outlook for US economy
+    4 - Somewhat positive outlook
+    3 - Neutral outlook
+    2 - Somewhat negative outlook
+    1 - Very negative outlook
     
     Transcript Excerpt:
     {text}
     
-    Provide ONLY a single number (1-5) as your response.
+    CRITICAL: Respond with ONLY the number 1, 2, 3, 4, or 5. Nothing else. No explanation.
   
   # Processing parameters
   max_tokens: 10
@@ -222,7 +222,7 @@ execution:
 backtest:
   # Periods
   training_start: "2006-01-01"
-  training_end: "2015-12-31"
+  training_end: "5-12-31"
   validation_start: "2016-01-01"
   validation_end: "2019-12-31"
   test_start: "2020-01-01"

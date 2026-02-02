@@ -4,14 +4,20 @@ LLM Scoring Module for AI Economy Score Predictor
 Implements prompt engineering and LLM-based sentiment scoring of earnings transcripts.
 """
 
+import os
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 import yaml
 import re
 from datetime import datetime
+import time
 import warnings
+from dotenv import load_dotenv
 warnings.filterwarnings('ignore')
+
+# Load environment variables
+load_dotenv()
 
 try:
     import openai
@@ -30,7 +36,10 @@ class LLMScorer:
     def __init__(self, config_path: str = "config.yaml"):
         """Initialize with configuration."""
         with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+            config_content = f.read()
+            # Expand environment variables in config
+            config_content = os.path.expandvars(config_content)
+            self.config = yaml.safe_load(config_content)
         
         self.llm_config = self.config['llm']
         self.provider = self.llm_config['provider']
@@ -71,17 +80,11 @@ class LLMScorer:
         Returns:
             Cleaned text
         """
-        # Remove safe harbor statements (common patterns)
-        patterns_to_remove = [
-            r"forward-looking statements.*?(?=\n\n|\Z)",
-            r"safe harbor.*?(?=\n\n|\Z)",
-            r"GAAP.*?reconciliation.*?(?=\n\n|\Z)",
-            r"operator:.*?(?=\n)",
-            r"\\[.*?\\]",  # Remove [Operator Instructions]
-        ]
+        # Only remove truly boilerplate content, keep speaker tags minimal
+        # Most cleaning was too aggressive - transcripts need context
         
-        for pattern in patterns_to_remove:
-            text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
+        # Remove operator instructions in brackets
+        text = re.sub(r'\[Operator Instructions\]', '', text, flags=re.IGNORECASE)
         
         # Remove excessive whitespace
         text = re.sub(r'\n{3,}', '\n\n', text)
@@ -139,6 +142,7 @@ class LLMScorer:
     ) -> List[str]:
         """
         Split text into chunks for LLM processing.
+        Handles both paragraph-based and sentence-based splitting.
         
         Args:
             text: Text to chunk
@@ -150,31 +154,65 @@ class LLMScorer:
         if chunk_size is None:
             chunk_size = self.llm_config['chunk_size']
         
-        # Split on paragraph boundaries
+        # If text is shorter than chunk_size, return as single chunk
+        if len(text) <= chunk_size:
+            return [text]
+        
+        # Try splitting on paragraph boundaries first
         paragraphs = text.split('\n\n')
+        
+        # If we have meaningful paragraphs, use them
+        if len(paragraphs) > 1 and min(len(p) for p in paragraphs) > 100:
+            chunks = []
+            current_chunk = ""
+            
+            for para in paragraphs:
+                if len(current_chunk) + len(para) <= chunk_size:
+                    current_chunk += para + "\n\n"
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = para + "\n\n"
+            
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            
+            return chunks
+        
+        # No paragraph breaks - split on sentences or character boundaries
+        # Split on common sentence boundaries
+        sentences = re.split(r'(?<=[.!?])\s+', text)
         
         chunks = []
         current_chunk = ""
         
-        for para in paragraphs:
-            if len(current_chunk) + len(para) <= chunk_size:
-                current_chunk += para + "\n\n"
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) <= chunk_size:
+                current_chunk += sentence + " "
             else:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
-                current_chunk = para + "\n\n"
+                # If single sentence is too long, force split it
+                if len(sentence) > chunk_size:
+                    for i in range(0, len(sentence), chunk_size):
+                        chunks.append(sentence[i:i+chunk_size])
+                    current_chunk = ""
+                else:
+                    current_chunk = sentence + " "
         
         if current_chunk:
             chunks.append(current_chunk.strip())
         
-        return chunks
+        return chunks if chunks else [text]
     
-    def score_text_openai(self, text: str) -> Optional[int]:
+    def score_text_openai(self, text: str, timeout: int = 30, max_retries: int = 5) -> Optional[int]:
         """
-        Score text using OpenAI API.
+        Score text using OpenAI API with timeout, rate limit handling, and retries.
         
         Args:
             text: Text to score
+            timeout: API timeout in seconds
+            max_retries: Maximum retry attempts for rate limits
             
         Returns:
             Score (1-5) or None if error
@@ -182,36 +220,82 @@ class LLMScorer:
         if self.client is None:
             return None
         
-        try:
-            # Format prompt
-            prompt = self.llm_config['prompt_template'].format(text=text)
-            
-            # Call API
-            response = self.client.chat.completions.create(
-                model=self.llm_config['model'],
-                messages=[
-                    {"role": "system", "content": "You are an expert economic analyst."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.llm_config['temperature'],
-                max_tokens=self.llm_config['max_tokens']
-            )
-            
-            # Extract score
-            score_text = response.choices[0].message.content.strip()
-            
-            # Parse score (should be single digit 1-5)
-            score = int(score_text)
-            
-            if 1 <= score <= 5:
-                return score
-            else:
-                print(f"Warning: Invalid score {score}, expected 1-5")
-                return None
+        # Format prompt once
+        prompt = self.llm_config['prompt_template'].format(text=text)
+        
+        for attempt in range(max_retries):
+            try:
+                # Call API with timeout and optimizations
+                response = self.client.chat.completions.create(
+                    model=self.llm_config['model'],
+                    messages=[
+                        {"role": "system", "content": "You are an expert economic analyst."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.llm_config['temperature'],
+                    max_tokens=self.llm_config['max_tokens'],
+                    timeout=timeout
+                )
                 
-        except Exception as e:
-            print(f"Error scoring with OpenAI: {e}")
-            return None
+                # Extract score
+                score_text = response.choices[0].message.content.strip()
+            
+                # Parse score - extract first digit found
+                # Handle cases where LLM returns "5" or "The score is 5" or just text
+                match = re.search(r'\b([1-5])\b', score_text)
+                if match:
+                    score = int(match.group(1))
+                    return score
+                else:
+                    # Try to find any digit
+                    digits = re.findall(r'\d', score_text)
+                    if digits:
+                        score = int(digits[0])
+                        if 1 <= score <= 5:
+                            return score
+                    
+                    print(f"Warning: Could not parse score from: {score_text[:100]}")
+                    return None
+                    
+            except openai.RateLimitError as e:
+                # Exponential backoff for rate limits
+                wait_time = (2 ** attempt) + (np.random.random() * 0.1)  # 1, 2, 4, 8, 16 seconds + jitter
+                if attempt < max_retries - 1:
+                    print(f"Rate limit hit, waiting {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Rate limit exceeded after {max_retries} attempts: {e}")
+                    return None
+                    
+            except openai.APITimeoutError as e:
+                # Retry timeouts with shorter backoff
+                wait_time = 1 + attempt
+                if attempt < max_retries - 1:
+                    print(f"Timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Timeout after {max_retries} attempts: {e}")
+                    return None
+                    
+            except openai.APIError as e:
+                # Retry API errors with backoff
+                if "overloaded" in str(e).lower() or "capacity" in str(e).lower():
+                    wait_time = (2 ** attempt) + np.random.random()
+                    if attempt < max_retries - 1:
+                        print(f"API overloaded, waiting {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})...")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"API error after {max_retries} attempts: {e}")
+                        return None
+                else:
+                    print(f"API error: {e}")
+                    return None
+                    
+            except Exception as e:
+                print(f"Error scoring with OpenAI: {e}")
+                return None
+        
+        return None
     
     def score_text_anthropic(self, text: str) -> Optional[int]:
         """
@@ -314,23 +398,121 @@ class LLMScorer:
             return {
                 'firm_score': None,
                 'chunk_scores': [],
-                'confidence': 0.0
+                'confidence': 0.0,
+                'aggregation_method': 'none'
             }
         
-        # Aggregate chunk scores (mean)
-        firm_score = np.mean(chunk_scores)
-        
-        # Calculate confidence (inverse of variance)
-        if len(chunk_scores) > 1:
-            confidence = 1.0 / (1.0 + np.var(chunk_scores))
-        else:
-            confidence = 0.5
+        # Advanced aggregation methods
+        aggregation = self._aggregate_scores(chunk_scores)
         
         return {
-            'firm_score': firm_score,
+            'firm_score': aggregation['firm_score'],
             'chunk_scores': chunk_scores,
-            'confidence': confidence,
-            'num_chunks': len(chunks)
+            'confidence': aggregation['confidence'],
+            'num_chunks': len(chunks),
+            'aggregation_method': aggregation['method'],
+            'score_std': aggregation['std'],
+            'score_range': aggregation['range'],
+            'sentiment_trend': aggregation.get('trend', 0.0)
+        }
+    
+    def _aggregate_scores(self, scores: List[int]) -> Dict:
+        """
+        Advanced score aggregation with multiple statistical methods.
+        
+        Methods applied:
+        1. Trimmed mean (remove outliers)
+        2. Position-weighted (early chunks = guidance, more weight)
+        3. Variance-based confidence
+        4. Sentiment trajectory analysis
+        
+        Args:
+            scores: List of chunk scores
+            
+        Returns:
+            Dict with aggregated score and metadata
+        """
+        scores_array = np.array(scores)
+        
+        # Method 1: Simple mean (baseline)
+        simple_mean = np.mean(scores_array)
+        
+        # Method 2: Trimmed mean (remove top/bottom 10% if enough samples)
+        if len(scores) >= 10:
+            trim_pct = 0.1
+            from scipy import stats
+            trimmed_mean = stats.trim_mean(scores_array, trim_pct)
+        else:
+            trimmed_mean = simple_mean
+        
+        # Method 3: Weighted by position (early chunks = forward guidance)
+        # Weight decays: first 25% chunks get 1.5x, middle 50% get 1.0x, last 25% get 0.8x
+        n = len(scores)
+        weights = np.ones(n)
+        
+        # Early chunks (first 25%) - forward-looking statements
+        early_cutoff = max(1, n // 4)
+        weights[:early_cutoff] = 1.5
+        
+        # Late chunks (last 25%) - Q&A, often repetitive
+        late_cutoff = max(1, n * 3 // 4)
+        weights[late_cutoff:] = 0.8
+        
+        weights = weights / weights.sum()  # Normalize
+        weighted_mean = np.average(scores_array, weights=weights)
+        
+        # Method 4: Median (robust to outliers)
+        median_score = np.median(scores_array)
+        
+        # Method 5: Sentiment trajectory (is sentiment improving/declining?)
+        if len(scores) >= 3:
+            # Fit linear trend
+            x = np.arange(len(scores))
+            slope, _ = np.polyfit(x, scores_array, 1)
+            sentiment_trend = slope  # Positive = improving, negative = declining
+        else:
+            sentiment_trend = 0.0
+        
+        # Choose final score based on context
+        # Use weighted mean as primary, adjusted by trend
+        if len(scores) >= 10:
+            # For longer transcripts, use trimmed + weighted
+            firm_score = (trimmed_mean * 0.6 + weighted_mean * 0.4)
+        else:
+            # For shorter transcripts, use weighted mean
+            firm_score = weighted_mean
+        
+        # Adjust slightly for strong trends (momentum matters)
+        if abs(sentiment_trend) > 0.1:
+            trend_adjustment = sentiment_trend * 0.1  # Max ±0.2 adjustment
+            firm_score += trend_adjustment
+        
+        # Clip to valid range
+        firm_score = np.clip(firm_score, 1.0, 5.0)
+        
+        # Calculate confidence metrics
+        std = np.std(scores_array)
+        score_range = (float(np.min(scores_array)), float(np.max(scores_array)))
+        
+        # Confidence: higher when scores agree (low variance)
+        # and when we have many samples
+        sample_confidence = min(1.0, len(scores) / 20.0)  # Max at 20+ chunks
+        variance_confidence = 1.0 / (1.0 + std)
+        confidence = (sample_confidence * 0.4 + variance_confidence * 0.6)
+        
+        return {
+            'firm_score': float(firm_score),
+            'method': 'weighted_trimmed_trend',
+            'confidence': float(confidence),
+            'std': float(std),
+            'range': score_range,
+            'trend': float(sentiment_trend),
+            'components': {
+                'simple_mean': float(simple_mean),
+                'trimmed_mean': float(trimmed_mean),
+                'weighted_mean': float(weighted_mean),
+                'median': float(median_score)
+            }
         }
     
     def score_multiple_transcripts(

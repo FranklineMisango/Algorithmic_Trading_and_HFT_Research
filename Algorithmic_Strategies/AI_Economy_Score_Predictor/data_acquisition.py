@@ -2,13 +2,26 @@
 Data Acquisition Module - Real Data via FRED API + Hugging Face Transcripts
 """
 
+import os
 import pandas as pd
 import yaml
 from typing import Dict, List, Optional
 import warnings
+from dotenv import load_dotenv
 warnings.filterwarnings('ignore')
 
 from fredapi import Fred
+from tqdm import tqdm
+
+# Load environment variables
+load_dotenv()
+
+try:
+    from datasets import load_dataset
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+    print("Warning: datasets library not installed. Install with: pip install datasets")
 
 try:
     from datasets import load_dataset
@@ -24,18 +37,33 @@ class DataAcquisition:
     def __init__(self, config_path: str = "config.yaml"):
         """Initialize with configuration."""
         with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+            config_content = f.read()
+            # Expand environment variables in config
+            config_content = os.path.expandvars(config_content)
+            self.config = yaml.safe_load(config_content)
         
         fred_key = self.config['data']['macro'].get('fred_api_key')
         self.fred = Fred(api_key=fred_key)
         print(f"✓ FRED API initialized")
     
+<<<<<<< HEAD
+    def fetch_earnings_transcripts(self, start_date: str, end_date: str, max_records: int = None) -> pd.DataFrame:
+=======
     def fetch_earnings_transcripts(self, start_date: str, end_date: str) -> pd.DataFrame:
+>>>>>>> 11b5a9374060a430da21469df17eb7dd467c2cae
         """
         Fetch earnings call transcripts from Hugging Face dataset.
         
         Dataset: kurry/sp500_earnings_transcripts (2005-2025)
         
+<<<<<<< HEAD
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            max_records: Not used (kept for compatibility)
+        
+=======
+>>>>>>> 11b5a9374060a430da21469df17eb7dd467c2cae
         Returns:
             DataFrame with columns: symbol, date, transcript_text, company_name, etc.
         """
@@ -43,6 +71,19 @@ class DataAcquisition:
             raise ImportError("datasets library required. Install: pip install datasets")
         
         print(f"Fetching transcripts from Hugging Face (kurry/sp500_earnings_transcripts)...")
+<<<<<<< HEAD
+        
+        from datasets import load_dataset
+        
+        # Load the full dataset (fast - downloads in seconds!)
+        print("Downloading dataset...")
+        dataset = load_dataset("kurry/sp500_earnings_transcripts", split="train")
+        
+        # Convert to pandas DataFrame for fast filtering
+        print("Converting to DataFrame...")
+        df = dataset.to_pandas()
+        print(f"✓ Loaded {len(df):,} total transcripts")
+=======
         print("Using streaming mode to avoid disk space issues...")
         
         # Use STREAMING mode to avoid downloading entire dataset
@@ -54,11 +95,30 @@ class DataAcquisition:
         # Convert dates for filtering
         start_ts = pd.Timestamp(start_date)
         end_ts = pd.Timestamp(end_date)
+>>>>>>> 11b5a9374060a430da21469df17eb7dd467c2cae
         
         # Load S&P 500 symbols for filtering
         sp500 = self.fetch_sp500_constituents()
         sp500_symbols = set(sp500['Symbol'].tolist())
         
+<<<<<<< HEAD
+        # Fast filtering with pandas
+        print("Filtering by date and S&P 500 membership...")
+        
+        # Filter by date
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+            print(f"  After date filter: {len(df):,} transcripts")
+        
+        # Filter by S&P 500 membership
+        if 'symbol' in df.columns:
+            df = df[df['symbol'].isin(sp500_symbols)]
+        elif 'ticker' in df.columns:
+            df = df[df['ticker'].isin(sp500_symbols)]
+        
+        print(f"✓ Final result: {len(df):,} S&P 500 transcripts ({start_date} to {end_date})")
+=======
         # Stream and filter data
         print("Streaming and filtering transcripts (this may take a few minutes)...")
         filtered_records = []
@@ -97,6 +157,7 @@ class DataAcquisition:
             symbol_col = 'symbol' if 'symbol' in df.columns else 'ticker'
             df = df[df[symbol_col].isin(sp500['Symbol'])]
             print(f"✓ Filtered to {len(df)} S&P 500 transcripts")
+>>>>>>> 11b5a9374060a430da21469df17eb7dd467c2cae
         
         return df
     

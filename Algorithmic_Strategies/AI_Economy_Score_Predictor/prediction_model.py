@@ -61,11 +61,51 @@ class PredictionModel:
         feature_cols = ['agg_score_norm']
         
         if controls is not None:
-            merged = merged.merge(controls, on='date', how='left')
-            feature_cols.extend([col for col in controls.columns if col != 'date'])
+            # Convert controls to quarterly frequency (use end-of-quarter values)
+            controls_copy = controls.copy()
+            
+            # Remove duplicate columns if they exist
+            controls_copy = controls_copy.loc[:, ~controls_copy.columns.duplicated()]
+            
+            controls_copy['date'] = pd.to_datetime(controls_copy['date'])
+            controls_copy['quarter_date'] = controls_copy['date'].dt.to_period('Q').dt.to_timestamp()
+            
+            # Get control variable columns (exclude date columns)
+            control_vars = [col for col in controls_copy.columns if col not in ['date', 'quarter_date']]
+            
+            # Group by quarter and take the last value (end-of-quarter)
+            controls_quarterly = controls_copy.groupby('quarter_date')[control_vars].last().reset_index()
+            controls_quarterly = controls_quarterly.rename(columns={'quarter_date': 'date'})
+            
+            # Merge with quarterly data
+            merged = merged.merge(controls_quarterly, on='date', how='left')
+            feature_cols.extend(control_vars)
         
         X = merged[feature_cols]
         y = merged[f'target_h{horizon}']
+        
+        print(f"\n[DEBUG] Horizon {horizon}Q before cleaning:")
+        print(f"  Merged shape: {merged.shape}")
+        print(f"  Feature columns: {feature_cols}")
+        print(f"  X shape: {X.shape}")
+        print(f"  y shape: {y.shape}")
+        print(f"  NaN counts in X: {X.isna().sum().to_dict()}")
+        print(f"  NaN count in y: {y.isna().sum()}")
+        
+        # Drop any rows with NaN values in features or target
+        valid_mask = ~(X.isna().any(axis=1) | y.isna())
+        X = X[valid_mask]
+        y = y[valid_mask]
+        merged = merged[valid_mask]
+        
+        print(f"[DEBUG] After NaN removal:")
+        print(f"  X shape: {X.shape}")
+        print(f"  y shape: {y.shape}")
+        print(f"  Valid samples: {valid_mask.sum()}/{len(valid_mask)}")
+        
+        # Check if we have enough samples
+        if len(X) < 3:
+            print(f"  WARNING: Only {len(X)} samples - insufficient for regression")
         
         return X, y, merged
     
@@ -114,7 +154,8 @@ class PredictionModel:
         Returns:
             Predictions
         """
-        X_with_const = sm.add_constant(X_test)
+        # Add constant, ensuring column names match training data
+        X_with_const = sm.add_constant(X_test, has_constant='add')
         return model_dict['model'].predict(X_with_const)
     
     def evaluate_model(
@@ -183,11 +224,34 @@ class PredictionModel:
                 agg_scores, gdp_data, h, controls
             )
             
+            # Check if we have enough data
+            if len(X) < 5:
+                print(f"  ERROR: Only {len(X)} samples after NaN removal - need at least 5")
+                print(f"  Skipping horizon {h}Q\n")
+                continue
+            
+            # CRITICAL FIX: Align train_mask with cleaned data
+            # The prepare_regression_data may have dropped rows due to NaN
+            # We need to align the boolean mask with the cleaned indices
+            aligned_mask = train_mask.loc[X.index] if hasattr(X, 'index') else train_mask[:len(X)]
+            
             # Split train/test
-            X_train = X[train_mask]
-            y_train = y[train_mask]
-            X_test = X[~train_mask]
-            y_test = y[~train_mask]
+            X_train = X[aligned_mask]
+            y_train = y[aligned_mask]
+            X_test = X[~aligned_mask]
+            y_test = y[~aligned_mask]
+            
+            print(f"[DEBUG] Train/Test split for horizon {h}Q:")
+            print(f"  X_train shape: {X_train.shape}")
+            print(f"  X_test shape: {X_test.shape}")
+            print(f"  X_train columns: {X_train.columns.tolist()}")
+            print(f"  X_test columns: {X_test.columns.tolist()}")
+            
+            # Check test set is not empty
+            if len(X_test) == 0:
+                print(f"  ERROR: Test set is empty for horizon {h}Q")
+                print(f"  Skipping horizon {h}Q\n")
+                continue
             
             # Train
             model_dict = self.train_model(X_train, y_train)
