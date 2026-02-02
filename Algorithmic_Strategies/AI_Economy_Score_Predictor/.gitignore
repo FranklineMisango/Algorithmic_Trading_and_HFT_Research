@@ -1,5 +1,9 @@
-# Environment variables
+# Environment variables and API keys
 .env
+.env.*
+*.yaml
+config.yaml
+aws_job_info.txt
 
 # Python
 __pycache__/
