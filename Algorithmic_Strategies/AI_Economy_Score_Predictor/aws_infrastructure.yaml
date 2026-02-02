@@ -1,0 +1,204 @@
+# CloudFormation Template for Transcript Scoring Infrastructure
+# Deploy with: aws cloudformation create-stack --stack-name transcript-scoring --template-body file://aws_infrastructure.yaml
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Infrastructure for distributed transcript scoring with EC2 spot instances'
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name for the S3 bucket (must be globally unique)
+    Default: transcript-scoring
+  
+  InstanceType:
+    Type: String
+    Description: EC2 instance type for workers
+    Default: t3.medium
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - c5.large
+      - c5.xlarge
+  
+  SpotPrice:
+    Type: String
+    Description: Maximum price for spot instances (USD/hour)
+    Default: '0.05'
+
+Resources:
+  # S3 Bucket for storing transcripts and results
+  TranscriptBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${BucketName}-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldBatches
+            Status: Enabled
+            ExpirationInDays: 30
+            Prefix: input/batches/
+      Tags:
+        - Key: Project
+          Value: AI_Economy_Score_Predictor
+
+  # DynamoDB Table for job tracking
+  JobTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: transcript-scoring-jobs
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Project
+          Value: AI_Economy_Score_Predictor
+
+  # IAM Role for EC2 instances
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: transcript-scorer-ec2-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: transcript-scorer-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt TranscriptBucket.Arn
+                  - !Sub '${TranscriptBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource: !GetAtt JobTable.Arn
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:transcript-scorer/*'
+
+  # Instance Profile for EC2
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: transcript-scorer-profile
+      Roles:
+        - !Ref EC2Role
+
+  # Security Group for EC2 instances
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: transcript-scorer-workers
+      GroupDescription: Security group for transcript scoring workers
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Project
+          Value: AI_Economy_Score_Predictor
+
+  # Launch Template for Spot Instances
+  WorkerLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: transcript-scorer-worker
+      LaunchTemplateData:
+        ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref WorkerSecurityGroup
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            MaxPrice: !Ref SpotPrice
+            SpotInstanceType: one-time
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
+            
+            # Update system
+            yum update -y
+            
+            # Install Python 3.11
+            yum install -y python3.11 python3.11-pip git
+            
+            # Install AWS CLI
+            pip3.11 install --upgrade awscli
+            
+            # Download worker code from S3
+            cd /home/ec2-user
+            aws s3 cp s3://${TranscriptBucket}/code/worker-code.zip ./worker-code.zip
+            unzip worker-code.zip
+            cd worker
+            
+            # Install dependencies
+            pip3.11 install -r requirements.txt
+            
+            # Run worker
+            python3.11 aws_worker.py --bucket ${TranscriptBucket} --config config.yaml > /var/log/worker.log 2>&1
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: transcript-scorer-worker
+              - Key: Project
+                Value: AI_Economy_Score_Predictor
+
+Outputs:
+  BucketName:
+    Description: S3 bucket name
+    Value: !Ref TranscriptBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+  
+  JobTableName:
+    Description: DynamoDB table name
+    Value: !Ref JobTable
+    Export:
+      Name: !Sub '${AWS::StackName}-JobTableName'
+  
+  EC2RoleName:
+    Description: IAM role for EC2 instances
+    Value: !Ref EC2Role
+    Export:
+      Name: !Sub '${AWS::StackName}-EC2RoleName'
+  
+  InstanceProfileName:
+    Description: Instance profile name
+    Value: !Ref EC2InstanceProfile
+    Export:
+      Name: !Sub '${AWS::StackName}-InstanceProfileName'
+  
+  LaunchTemplateId:
+    Description: Launch template ID
+    Value: !Ref WorkerLaunchTemplate
+    Export:
+      Name: !Sub '${AWS::StackName}-LaunchTemplateId'
