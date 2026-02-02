@@ -107,8 +107,8 @@ class AWSJobSubmitter:
         """Launch EC2 spot instances to process jobs"""
         
         if not ami_id:
-            # Use Amazon Linux 2023 AMI (update this for your region)
-            ami_id = 'ami-0c02fb55b34e3f5e2'  # Example for us-east-1
+            # Use Ubuntu 22.04 LTS AMI for us-east-1
+            ami_id = 'ami-0030e4319cbf4dbf2'  # Ubuntu 22.04 LTS us-east-1
         
         logger.info(f"Launching {num_instances} spot instances of type {instance_type}")
         
