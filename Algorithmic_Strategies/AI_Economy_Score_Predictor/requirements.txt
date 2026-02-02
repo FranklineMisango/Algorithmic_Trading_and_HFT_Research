@@ -32,5 +32,9 @@ pyyaml>=6.0
 tqdm>=4.66.0
 joblib>=1.3.0
 
+# AWS Integration
+boto3>=1.34.0  # AWS SDK
+rich>=13.7.0   # Rich terminal UI for monitoring
+
 # Testing
 pytest>=7.4.0
