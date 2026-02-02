@@ -6,7 +6,7 @@ data:
   transcripts:
     source: "seekingalpha"  # Options: seekingalpha, capiq, bloomberg, alphaSense
     universe: "SP500"  # SP500 or RUSSELL3000
-    start_date: "2016-01-01"
+    start_date: "2025-01-01"
     end_date: "2025-12-31"
     min_us_revenue_pct: 0.50  # Exclude non-US focused firms
     

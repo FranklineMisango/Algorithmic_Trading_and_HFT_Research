@@ -123,6 +123,9 @@ class DataAcquisition:
                     'date': series.index,
                     'value': series.values
                 })
+                # Ensure date column is datetime and filter explicitly
+                df['date'] = pd.to_datetime(df['date'])
+                df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
                 macro_data[name] = df
                 print(f"✓ Fetched {name}: {len(df)} observations")
             except Exception as e:
@@ -144,6 +147,9 @@ class DataAcquisition:
     def fetch_control_variables(self, start_date: str, end_date: str, pmi_df: pd.DataFrame = None) -> pd.DataFrame:
         """Fetch control variables from FRED, but use provided PMI DataFrame if given."""
         controls = {}
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+        
         try:
             gs10 = self.fred.get_series('GS10', observation_start=start_date, observation_end=end_date)
             gs2 = self.fred.get_series('GS2', observation_start=start_date, observation_end=end_date)
@@ -166,7 +172,8 @@ class DataAcquisition:
         if pmi_df is not None:
             # Expect columns: 'date' and 'pmi' (already cleaned in notebook)
             pmi_df = pmi_df.copy()
-            pmi_df = pmi_df[(pmi_df['date'] >= pd.to_datetime(start_date)) & (pmi_df['date'] <= pd.to_datetime(end_date))]
+            pmi_df['date'] = pd.to_datetime(pmi_df['date'])
+            pmi_df = pmi_df[(pmi_df['date'] >= start_dt) & (pmi_df['date'] <= end_dt)]
             pmi_df = pmi_df.set_index('date').sort_index()
             controls['pmi'] = pmi_df['pmi']
             print(f"✓ Used local PMI data: {len(pmi_df)} rows")
@@ -177,7 +184,12 @@ class DataAcquisition:
             raise ValueError("Failed to fetch any control variables")
 
         df = pd.DataFrame(controls)
-        df = df.ffill()
+        # Explicit date filtering for all control variables
+        df.index = pd.to_datetime(df.index)
+        df = df[(df.index >= start_dt) & (df.index <= end_dt)]
+        
+        # Forward-fill to handle missing dates (especially for PMI which has different date stamps)
+        df = df.ffill().bfill()
         print(f"✓ Control variables: {len(df)} observations")
         return df
     
