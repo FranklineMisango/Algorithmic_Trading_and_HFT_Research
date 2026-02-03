@@ -6,7 +6,7 @@ data:
   transcripts:
     source: "seekingalpha"  # Options: seekingalpha, capiq, bloomberg, alphaSense
     universe: "SP500"  # SP500 or RUSSELL3000
-    start_date: "2025-01-01"
+    start_date: "2015-01-01"
     end_date: "2025-12-31"
     min_us_revenue_pct: 0.50  # Exclude non-US focused firms
     
@@ -38,9 +38,27 @@ data:
 
 # LLM Configuration
 llm:
-  provider: "openai"  # Options: openai, anthropic, local
-  model: "gpt-4o-mini"  # gpt-4, gpt-3.5-turbo, claude-3-opus, llama-3-70b
-  api_key: "${OPENAI_API_KEY}"  # Get from https://platform.openai.com/api-keys
+  # Provider options:
+  # - "openai": OpenAI GPT models (paid, API key required)
+  # - "anthropic": Anthropic Claude models (paid, API key required)
+  # - "huggingface": Free Hugging Face models (local, no API key needed)
+  # - "ollama": Free Ollama models (local, no API key needed) ⭐ ACTIVE
+  
+  provider: "ollama"  # ✅ Using Ollama with Mistral (7B, free, GPU-accelerated)
+  
+  # Model selection per provider:
+  # OpenAI: "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"
+  # Anthropic: "claude-3-opus", "claude-3-sonnet"
+  # Hugging Face: "facebook/opt-1.3b", "google/flan-t5-large", "mistralai/Mistral-7B-Instruct-v0.2"
+  # Ollama: "llama3.2", "llama3.2:1b", "mistral", "phi3"
+  model: "mistral"  # ✅ Installed and tested  
+  
+  # API keys (only needed for paid providers)
+  api_key: "${OPENAI_API_KEY}"  # Not needed for huggingface or ollama
+  
+  # Ollama URL (only for ollama provider)
+  ollama_url: "http://localhost:11434"
+  
   # Scoring prompt
   prompt_template: |
     You are an expert economic analyst. Analyze the following excerpt from a company's earnings call transcript.

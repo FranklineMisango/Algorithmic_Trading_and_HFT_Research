@@ -29,6 +29,17 @@ try:
 except ImportError:
     print("Warning: anthropic not installed. Install with: pip install anthropic")
 
+try:
+    from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+    import torch
+except ImportError:
+    print("Warning: transformers not installed. Install with: pip install transformers torch")
+
+try:
+    import requests
+except ImportError:
+    print("Warning: requests not installed. Install with: pip install requests")
+
 
 class LLMScorer:
     """Handles LLM-based scoring of earnings call transcripts."""
@@ -61,9 +72,45 @@ class LLMScorer:
                 self.client = None
                 print("Warning: Anthropic API key not configured")
         
+        elif self.provider == 'huggingface':
+            print("Initializing Hugging Face model...")
+            self.client = self._init_huggingface()
+            
+        elif self.provider == 'ollama':
+            print("Initializing Ollama client...")
+            self.ollama_url = self.llm_config.get('ollama_url', 'http://localhost:11434')
+            self.client = 'ollama'  # Just a marker
+        
         else:
             self.client = None
             print(f"Warning: {self.provider} not yet supported")
+    
+    def _init_huggingface(self):
+        """Initialize Hugging Face model."""
+        try:
+            model_name = self.llm_config.get('model', 'facebook/opt-1.3b')
+            print(f"Loading model: {model_name}")
+            
+            # Check if GPU is available
+            device = 0 if torch.cuda.is_available() else -1
+            if device == 0:
+                print("Using GPU for inference")
+            else:
+                print("Using CPU for inference (this may be slow)")
+            
+            # Initialize text generation pipeline
+            pipe = pipeline(
+                "text-generation",
+                model=model_name,
+                device=device,
+                torch_dtype=torch.float16 if device == 0 else torch.float32,
+                max_length=self.llm_config.get('max_tokens', 512),
+            )
+            
+            return pipe
+        except Exception as e:
+            print(f"Error initializing Hugging Face model: {e}")
+            return None
     
     def clean_transcript(self, text: str) -> str:
         """
@@ -338,6 +385,130 @@ class LLMScorer:
             print(f"Error scoring with Anthropic: {e}")
             return None
     
+    def score_text_huggingface(self, text: str) -> Optional[int]:
+        """
+        Score text using Hugging Face model.
+        
+        Args:
+            text: Text to score
+            
+        Returns:
+            Score (1-5) or None if error
+        """
+        if self.client is None:
+            return None
+        
+        try:
+            # Format prompt
+            prompt = self.llm_config['prompt_template'].format(text=text[:1500])  # Truncate to avoid memory issues
+            
+            # Generate response
+            outputs = self.client(
+                prompt,
+                max_new_tokens=10,
+                temperature=self.llm_config.get('temperature', 0.1),
+                do_sample=self.llm_config.get('temperature', 0.1) > 0,
+                pad_token_id=self.client.tokenizer.eos_token_id,
+            )
+            
+            # Extract generated text
+            generated_text = outputs[0]['generated_text']
+            
+            # Remove prompt from generated text
+            response = generated_text[len(prompt):].strip()
+            
+            # Parse score - extract first digit found
+            match = re.search(r'\b([1-5])\b', response)
+            if match:
+                score = int(match.group(1))
+                return score
+            else:
+                # Try to find any digit
+                digits = re.findall(r'\d', response)
+                if digits:
+                    score = int(digits[0])
+                    if 1 <= score <= 5:
+                        return score
+                
+                print(f"Warning: Could not parse score from HF response: {response[:100]}")
+                return None
+                
+        except Exception as e:
+            print(f"Error scoring with Hugging Face: {e}")
+            return None
+    
+    def score_text_ollama(self, text: str, max_retries: int = 3) -> Optional[int]:
+        """
+        Score text using Ollama local model.
+        
+        Args:
+            text: Text to score
+            max_retries: Maximum retry attempts
+            
+        Returns:
+            Score (1-5) or None if error
+        """
+        try:
+            # Format prompt
+            prompt = self.llm_config['prompt_template'].format(text=text[:2000])  # Truncate for local model
+            
+            model_name = self.llm_config.get('model', 'llama3.2')
+            
+            for attempt in range(max_retries):
+                try:
+                    # Call Ollama API
+                    response = requests.post(
+                        f"{self.ollama_url}/api/generate",
+                        json={
+                            "model": model_name,
+                            "prompt": prompt,
+                            "stream": False,
+                            "options": {
+                                "temperature": self.llm_config.get('temperature', 0.0),
+                                "num_predict": 10,
+                            }
+                        },
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        response_text = result.get('response', '').strip()
+                        
+                        # Parse score - extract first digit found
+                        match = re.search(r'\b([1-5])\b', response_text)
+                        if match:
+                            score = int(match.group(1))
+                            return score
+                        else:
+                            # Try to find any digit
+                            digits = re.findall(r'\d', response_text)
+                            if digits:
+                                score = int(digits[0])
+                                if 1 <= score <= 5:
+                                    return score
+                            
+                            print(f"Warning: Could not parse score from Ollama: {response_text[:100]}")
+                            return None
+                    else:
+                        print(f"Ollama API error: {response.status_code} - {response.text}")
+                        if attempt < max_retries - 1:
+                            time.sleep(1)
+                            continue
+                        return None
+                        
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        print(f"Ollama timeout, retrying... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(1)
+                    else:
+                        print("Ollama timeout after all retries")
+                        return None
+                        
+        except Exception as e:
+            print(f"Error scoring with Ollama: {e}")
+            return None
+    
     def score_text(self, text: str) -> Optional[int]:
         """
         Score text using configured LLM provider.
@@ -352,8 +523,12 @@ class LLMScorer:
             return self.score_text_openai(text)
         elif self.provider == 'anthropic':
             return self.score_text_anthropic(text)
+        elif self.provider == 'huggingface':
+            return self.score_text_huggingface(text)
+        elif self.provider == 'ollama':
+            return self.score_text_ollama(text)
         else:
-            # Placeholder for local models or other providers
+            # Placeholder for other providers
             return np.random.randint(1, 6)  # Random 1-5 for testing
     
     def score_transcript(
