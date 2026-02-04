@@ -122,10 +122,10 @@ class GoogleEarthCollector:
         Path(download_dir).mkdir(parents=True, exist_ok=True)
         
         try:
-            # Get download URL with high resolution
+            # Get download URL with very high resolution for detection
             url = image.getThumbURL({
                 'region': roi,
-                'dimensions': 2048,  # High resolution output
+                'dimensions': 4096,  # Very high resolution for better object detection
                 'format': 'png',
                 'min': 0,
                 'max': 3000  # Adjust for Sentinel-2 surface reflectance

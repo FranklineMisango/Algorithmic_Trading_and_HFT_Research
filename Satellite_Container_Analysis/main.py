@@ -11,9 +11,9 @@ import matplotlib.pyplot as plt
 
 # Import improved modules
 from ais_tracker import AISTracker
-from Satellite_Container_Analysis.detector import ImprovedContainerDetector
-from Satellite_Container_Analysis.collector import ImprovedSatelliteCollector
-from Satellite_Container_Analysis.signals import ImprovedSignalGenerator
+from detector import ImprovedContainerDetector
+from gee_collector import GoogleEarthCollector
+from signals import ImprovedSignalGenerator
 
 def main():
     print("="*70)
@@ -70,41 +70,41 @@ def main():
     print("Run: earthengine authenticate")
     
     try:
-        import ee
-        ee.Initialize(project=config['GoogleOAuth']['ProjectId'])
+        # Initialize Google Earth Engine collector
+        collector = GoogleEarthCollector(config_path='config.json', authenticate=False)
+        detector = ImprovedContainerDetector()
         
         print("\n✓ Earth Engine initialized")
         
-        # Initialize improved components
-        collector = ImprovedSatelliteCollector(ports)
-        detector = ImprovedContainerDetector()
-        
         # Download images for one port (demo)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=30)
-        
         print(f"\nDownloading satellite imagery for {ports[0]['name']}...")
-        images = collector.collect_port_images(
-            ports[0],
-            start_date.strftime('%Y-%m-%d'),
-            end_date.strftime('%Y-%m-%d'),
-            max_images=10
+        images_df = collector.collect_port_images(
+            port_name=ports[0]['name'],
+            days_back=30,
+            max_images=10,
+            max_cloud=10,
+            source='sentinel2'
         )
         
-        if images:
-            print(f"\n✓ Downloaded {len(images)} images")
+        if not images_df.empty:
+            print(f"\n✓ Downloaded {len(images_df)} images")
+            
+            # Save image metadata
+            images_df.to_csv(output_dir / 'satellite_image_metadata.csv', index=False)
             
             # Run detection
             print("\nRunning container detection...")
             detection_results = []
-            for img_info in images:
-                count, detections = detector.detect_containers(img_info['filepath'])
+            for _, row in images_df.iterrows():
+                count, detections = detector.detect_containers(row['filepath'])
                 detection_results.append({
-                    'port': img_info['port'],
-                    'date': img_info['date'],
-                    'count': count
+                    'port': row['port'],
+                    'date': row['date'],
+                    'count': count,
+                    'cloud_cover': row['cloud_cover'],
+                    'source': row['source']
                 })
-                print(f"  • {img_info['date']}: {count} objects detected")
+                print(f"  • {row['date']}: {count} objects detected (cloud: {row['cloud_cover']:.1f}%)")
             
             # Save satellite results
             sat_df = pd.DataFrame(detection_results)
