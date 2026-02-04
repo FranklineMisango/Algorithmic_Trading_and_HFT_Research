@@ -9,6 +9,9 @@
 *.dvi
 *.ps
 
+#block every paper folder inside
+**/paper/**
+ 
 # Font cache
 *.pk
 *.tfm
