@@ -1,0 +1,55 @@
+from ultralytics import YOLO
+import os
+
+# Set CUDA memory management for better fragmentation handling
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+# OPTIMIZED FOR xView CHALLENGE: TARGET >0.60 mAP
+# Memory-optimized settings for 11.63 GiB GPU
+# Using YOLO11s (small) for better accuracy than nano while maintaining speed
+# Key optimizations for small object detection in satellite imagery
+
+model = YOLO("yolo11s.pt")  # Upgraded from yolo11n to yolo11s (better accuracy)
+
+results = model.train(
+    data="/home/misango/codechest/Algorithmic_Trading_and_HFT_Research/Satellite_Container_Analysis/datasets/xview/xView.yaml", 
+    epochs=100,  # Increased from 50 (xView winners trained 100+ epochs)
+    imgsz=640,  # Reduced from 1024 to save memory (still good for satellite imagery)
+    batch=8,  # Reduced from 4 - will use gradient accumulation
+    device=0,
+    amp=True,  # Mixed precision to reduce memory usage
+    patience=20,  # Increased patience for larger model
+    save=True,  
+    save_period=5,  # Save every 5 epochs
+    optimizer='AdamW',  # Better than SGD for satellite imagery
+    lr0=0.001,  # Lower initial LR for AdamW
+    lrf=0.01,  # Final learning rate
+    momentum=0.937,
+    weight_decay=0.0005,
+    warmup_epochs=5.0,  # Longer warmup for stability
+    warmup_momentum=0.8,
+    hsv_h=0.015,  # Minimal hue shift (satellite colors are consistent)
+    hsv_s=0.4,  # Moderate saturation variation
+    hsv_v=0.4,  # Moderate brightness variation
+    degrees=15.0,  # Small rotation (satellite imagery has some orientation variation)
+    translate=0.1,  # Image translation
+    scale=0.5,  # Scale augmentation for multi-scale objects
+    shear=0.0,  # No shear (objects are not perspective-warped)
+    perspective=0.0,  # No perspective transform
+    flipud=0.0,  # No vertical flip (satellite images have consistent orientation)
+    fliplr=0.5,  # Horizontal flip is OK
+    mosaic=1.0,  # Mosaic augmentation (helps with small objects)
+    mixup=0.0,  # Disabled to save memory
+    copy_paste=0.0,  # Disabled to save memory
+    box=7.5,  # Box loss weight (default 7.5)
+    cls=0.5,  # Class loss weight (default 0.5)
+    dfl=1.5,  # DFL loss weight (default 1.5)
+    multi_scale=False,  # Disabled to save memory and avoid size fluctuation
+    iou=0.5,  # IoU threshold for NMS (matches xView evaluation)
+    val=True,  # Validate every epoch (now with labeled validation set)
+    plots=True,  # Save training plots
+    verbose=True,  # Verbose output
+    close_mosaic=10,  # Disable mosaic augmentation in last 10 epochs for stability
+    cache=False,  # Don't cache images in memory to save RAM
+    workers=4,  # Reduce dataloader workers to save memory
+)
