@@ -1,31 +1,17 @@
-# Satellite Container Analysis - Requirements
-# All fixes applied
-
-# Core dependencies
 numpy>=1.24.0
 pandas>=2.0.0
 scipy>=1.10.0
-
-# Satellite imagery
 earthengine-api>=0.1.350
 google-api-python-client>=2.0.0
-
-# Computer vision
 opencv-python>=4.8.0
 Pillow>=10.0.0
 ultralytics>=8.0.0  # YOLOv8
 torch>=2.0.0
 torchvision>=0.15.0
-
-# DOTA model support
 huggingface-hub>=0.16.0
-
-# Visualization
 matplotlib>=3.7.0
 seaborn>=0.12.0
 plotly>=5.14.0
-
-# Data collection
 requests>=2.31.0
 python-dotenv>=1.0.0
 
