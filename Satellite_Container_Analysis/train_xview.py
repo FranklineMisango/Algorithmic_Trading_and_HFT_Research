@@ -57,9 +57,9 @@ def main():
     print("  • Model: YOLO11s (small - 3x parameters vs nano)")
     print("  • Dataset: xView (satellite imagery)")
     print("  • Epochs: 300 (patience=100 for convergence)")
-    print("  • Image size: 896x896 (multi-scale: 448-1344px)")
-    print("  • Batch size: 3 (safe for 16GB GPU)")
-    print("  • Augmentation: Multi-scale, Mixup, Mosaic (full training)")
+    print("  • Image size: 896x896 (single-scale, containers uniform)")
+    print("  • Batch size: 2 (conservative for stability)")
+    print("  • Augmentation: Mixup, Mosaic, Rotation (30°)")
     print("  • Device: GPU")
     print()
     
@@ -87,8 +87,8 @@ def main():
         results = model.train(
             data=data_path,
             epochs=300,
-            imgsz=896,  # Reduced from 1024: multi_scale varies 0.5x-1.5x (448-1344px) to fit 16GB
-            batch=3,  # Conservative: batch=4 uses 13.9GB but TaskAlignedAssigner OOMs during loss calc
+            imgsz=1024,
+            batch=2,  # Conservative for stability (avoid TaskAlignedAssigner OOM)
             device=0,
             amp=True,
             patience=100,  # Increased from 50: allow more epochs without improvement before stopping
@@ -117,12 +117,12 @@ def main():
             box=7.5,
             cls=0.5,
             dfl=1.5,
-            multi_scale=True,  # Train on multiple scales: better for varying container sizes
+            multi_scale=False,  # Disabled: containers uniform size in xView, was causing div/0 error
             iou=0.5,
             val=True,
             plots=True,
             verbose=True,
-            close_mosaic=0,  # Keep mosaic augmentation throughout all epochs (was 10)
+            close_mosaic=10,  # Default: disable mosaic in last 10 epochs for cleaner final tuning
             cache=False,
             workers=4,
             project='runs/detect',
