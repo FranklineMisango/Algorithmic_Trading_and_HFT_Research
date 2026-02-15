@@ -15,10 +15,10 @@ data:
   options_source: "databento"  # Databento provides high-quality options data
   
   # Databento configuration
-  databento_api_key: "db-hXRTnkuYcQH9QD6JUsvW8tfCmivTY"
+  databento_api_key: "YOUR_DATABENTO_API_KEY"
   
   # Polygon.io configuration (backup)
-  polygon_api_key: "LmyZcrXv3oxrhByxuG8PnAEr3ROZ10FA"
+  polygon_api_key: "YOUR_POLYGON_API_KEY"
   polygon_rate_limit: 5  # API calls per minute (free tier limit)
 
 features:
