@@ -37,13 +37,7 @@ class OptionsDataAcquisition:
             'CRM', 'AMD', 'INTC', 'CSCO', 'VZ', 'T', 'CMCSA', 'PEP', 'ABT', 'COST'
         ]
         
-        # Polygon.io configuration
-        self.polygon_api_key = self.config['data'].get('polygon_api_key')
-        self.polygon_rate_limit = self.config['data'].get('polygon_rate_limit', 5)
-        self.api_call_count = 0
-        self.rate_limit_window_start = time.time()
-        
-        # Databento configuration
+        # Databento configuration (exclusive options data provider)
         self.databento_api_key = self.config['data'].get('databento_api_key')
 
     def _setup_logging(self):
@@ -109,154 +103,7 @@ class OptionsDataAcquisition:
         self.logger.info(f"Fetched data for {len(combined_df.index.levels[0])} tickers")
         return combined_df
 
-    def _rate_limit_polygon_api(self):
-        """Enforce Polygon.io rate limits (5 calls/min for free tier)."""
-        current_time = time.time()
-        
-        # Reset counter if we're in a new minute window
-        if current_time - self.rate_limit_window_start >= 60:
-            self.api_call_count = 0
-            self.rate_limit_window_start = current_time
-        
-        # If we've hit the rate limit, wait until the next window
-        if self.api_call_count >= self.polygon_rate_limit:
-            sleep_time = 60 - (current_time - self.rate_limit_window_start)
-            if sleep_time > 0:
-                self.logger.info(f"Rate limit reached. Waiting {sleep_time:.1f}s...")
-                time.sleep(sleep_time)
-                self.api_call_count = 0
-                self.rate_limit_window_start = time.time()
-        
-        self.api_call_count += 1
 
-    def fetch_polygon_options_data(self, ticker: str, date: str) -> Optional[pd.DataFrame]:
-        """
-        Fetch real options data from Polygon.io for a specific ticker and date.
-        
-        Args:
-            ticker: Stock ticker symbol
-            date: Date in YYYY-MM-DD format
-            
-        Returns:
-            DataFrame with options data or None if fetch fails
-        """
-        if not self.polygon_api_key:
-            self.logger.error("Polygon.io API key not configured")
-            return None
-        
-        self._rate_limit_polygon_api()
-        
-        try:
-            # Polygon.io snapshot endpoint for options
-            url = f"https://api.polygon.io/v3/snapshot/options/{ticker}"
-            params = {
-                'apiKey': self.polygon_api_key,
-                'date': date
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if 'results' not in data or not data['results']:
-                    return None
-                
-                options_list = []
-                for option in data['results']:
-                    details = option.get('details', {})
-                    last_quote = option.get('last_quote', {})
-                    greeks = option.get('greeks', {})
-                    
-                    options_list.append({
-                        'date': date,
-                        'ticker': ticker,
-                        'contract_type': details.get('contract_type', '').lower(),
-                        'strike': details.get('strike_price'),
-                        'expiry': details.get('expiration_date'),
-                        'bid': last_quote.get('bid'),
-                        'ask': last_quote.get('ask'),
-                        'last': last_quote.get('last'),
-                        'volume': option.get('day', {}).get('volume', 0),
-                        'open_interest': option.get('open_interest', 0),
-                        'implied_vol': greeks.get('vega'),
-                        'delta': greeks.get('delta'),
-                        'gamma': greeks.get('gamma'),
-                        'theta': greeks.get('theta'),
-                        'vega': greeks.get('vega')
-                    })
-                
-                return pd.DataFrame(options_list)
-            
-            elif response.status_code == 429:
-                self.logger.warning(f"Rate limit hit for {ticker} on {date}")
-                time.sleep(60)
-                return self.fetch_polygon_options_data(ticker, date)
-            
-            else:
-                self.logger.warning(f"Polygon API error {response.status_code} for {ticker}")
-                return None
-                
-        except Exception as e:
-            self.logger.error(f"Error fetching Polygon data for {ticker}: {e}")
-            return None
-
-    def fetch_real_options_data(self, underlying_prices: pd.DataFrame) -> pd.DataFrame:
-        """
-        Fetch real options data from Polygon.io for all tickers and dates.
-        Note: Free tier limits to 2 years of history and 5 calls/min.
-        
-        Args:
-            underlying_prices: DataFrame with underlying price data
-            
-        Returns:
-            DataFrame with real options data
-        """
-        self.logger.info("Fetching real options data from Polygon.io")
-        
-        if not self.polygon_api_key:
-            raise ValueError(
-                "Polygon.io API key required. Get free key at: https://polygon.io/\n"
-                "Set in config.yaml: data.polygon_api_key: 'YOUR_KEY_HERE'"
-            )
-        
-        all_options = []
-        dates = underlying_prices.index.get_level_values('Date').unique()
-        
-        # Limit to last 2 years for free tier
-        cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=730)
-        recent_dates = [d for d in dates if d >= cutoff_date]
-        
-        # Sample every 5th day to reduce API calls
-        sampled_dates = recent_dates[::5]
-        
-        self.logger.info(f"Fetching data for {len(sampled_dates)} sampled dates")
-        
-        for idx, date in enumerate(sampled_dates):
-            date_str = date.strftime('%Y-%m-%d')
-            
-            for ticker in self.sp100_tickers:
-                options_df = self.fetch_polygon_options_data(ticker, date_str)
-                
-                if options_df is not None and not options_df.empty:
-                    all_options.append(options_df)
-                
-                if (idx + 1) % 10 == 0:
-                    self.logger.info(f"Processed {idx + 1}/{len(sampled_dates)} dates")
-        
-        if not all_options:
-            raise ValueError("No options data fetched from Polygon.io")
-        
-        combined_options = pd.concat(all_options, ignore_index=True)
-        
-        # Filter for liquidity
-        combined_options = combined_options[
-            (combined_options['volume'] >= self.config['data']['min_volume']) &
-            (combined_options['open_interest'] >= self.config['data']['min_open_interest'])
-        ]
-        
-        self.logger.info(f"Fetched {len(combined_options)} real options records")
-        return combined_options
 
     def fetch_databento_options_data(self, underlying_prices: pd.DataFrame) -> pd.DataFrame:
         """
@@ -515,21 +362,11 @@ class OptionsDataAcquisition:
         if underlying_prices.empty:
             raise ValueError("Failed to fetch underlying price data")
 
-        # Fetch REAL options data ONLY - NO SYNTHETIC FALLBACK
-        options_source = self.config['data'].get('options_source', 'polygon')
-        
-        if options_source == 'databento':
-            self.logger.info("Using Databento for real options data")
-            options_data = self.fetch_databento_options_data(underlying_prices)
-            if options_data is None or options_data.empty:
-                raise ValueError("Databento returned no options data. NO SYNTHETIC FALLBACK ALLOWED.")
-        elif options_source == 'polygon':
-            self.logger.info("Using Polygon.io for real options data")
-            options_data = self.fetch_real_options_data(underlying_prices)
-            if options_data is None or options_data.empty:
-                raise ValueError("Polygon returned no options data. NO SYNTHETIC FALLBACK ALLOWED.")
-        else:
-            raise ValueError(f"Invalid options_source: {options_source}. Must be 'databento' or 'polygon'. NO SYNTHETIC DATA ALLOWED.")
+        # Fetch REAL options data from Databento ONLY - NO SYNTHETIC FALLBACK
+        self.logger.info("Using Databento OPRA feed for real options data")
+        options_data = self.fetch_databento_options_data(underlying_prices)
+        if options_data is None or options_data.empty:
+            raise ValueError("Databento returned no options data. NO SYNTHETIC FALLBACK ALLOWED.")
 
         # Save to disk
         self._save_data(underlying_prices, options_data)

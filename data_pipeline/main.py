@@ -14,8 +14,8 @@ from config import (
 )
 from alpaca_downloader import AlpacaDataDownloader
 from binance_downloader import BinanceDataDownloader
-from yfinance_options_downloader import YFinanceOptionsDownloader
-from polygon_options_downloader import PolygonOptionsDownloader
+# from yfinance_options_downloader import YFinanceOptionsDownloader
+# from polygon_options_downloader import PolygonOptionsDownloader
 from polygon_futures_downloader import PolygonFuturesDownloader
 from databento_downloader import DatabentoFuturesDownloader
 from databento_options_downloader import DatabentoOptionsDownloader
@@ -140,24 +140,26 @@ def main():
                         filter_near_money=True
                     )
                 logger.info("Databento options download completed")
-            elif args.options_source == 'polygon':
-                logger.info("Starting HISTORICAL Options data download via Polygon...")
-                options_downloader = PolygonOptionsDownloader()
-                for symbol in args.option_symbols:
-                    logger.info(f"Downloading historical options for {symbol}")
-                    options_downloader.download_historical_options(
-                        symbol,
-                        args.start_date,
-                        args.end_date,
-                        args.resolution,
-                        limit_contracts=20  # Limit to 20 contracts per symbol to stay within API limits
-                    )
-                logger.info("Historical options download completed")
+            # elif args.options_source == 'polygon':
+            #     logger.info("Starting HISTORICAL Options data download via Polygon...")
+            #     options_downloader = PolygonOptionsDownloader()
+            #     for symbol in args.option_symbols:
+            #         logger.info(f"Downloading historical options for {symbol}")
+            #         options_downloader.download_historical_options(
+            #             symbol,
+            #             args.start_date,
+            #             args.end_date,
+            #             args.resolution,
+            #             limit_contracts=20  # Limit to 20 contracts per symbol to stay within API limits
+            #         )
+            #     logger.info("Historical options download completed")
+            # else:
+            #     logger.info("Starting Options SNAPSHOT download via YFinance...")
+            #     options_downloader = YFinanceOptionsDownloader()
+            #     options_downloader.download_symbols(args.option_symbols)
+            #     logger.info("Options snapshot download completed")
             else:
-                logger.info("Starting Options SNAPSHOT download via YFinance...")
-                options_downloader = YFinanceOptionsDownloader()
-                options_downloader.download_symbols(args.option_symbols)
-                logger.info("Options snapshot download completed")
+                logger.warning(f"Options source '{args.options_source}' not available. Only 'databento' is currently supported.")
         except Exception as e:
             logger.error(f"Error with Options download: {str(e)}")
             if args.source == 'options':
