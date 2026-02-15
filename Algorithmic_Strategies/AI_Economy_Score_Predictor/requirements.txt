@@ -11,6 +11,8 @@ openai>=1.0.0
 anthropic>=0.7.0
 transformers>=4.35.0  # For local models
 torch>=2.0.0  # PyTorch for local LLMs
+bitsandbytes>=0.41.0  # GPU quantization for efficient inference
+accelerate>=0.24.0  # Distributed model loading
 
 # Data acquisition
 yfinance>=0.2.28

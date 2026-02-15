@@ -114,3 +114,4 @@ wandb
 websocket-client
 xgboost
 yfinance
+accelerate
