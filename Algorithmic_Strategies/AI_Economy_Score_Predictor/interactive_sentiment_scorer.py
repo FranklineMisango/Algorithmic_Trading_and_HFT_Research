@@ -514,8 +514,11 @@ Reasoning: [brief explanation]
     def fetch_market_context(self, symbol: str, date: str) -> Dict[str, any]:
         """Fetch market data from Yahoo Finance for context"""
         try:
-            # Convert date to datetime
+            # Convert date to datetime and make timezone-naive
             target_date = pd.to_datetime(date)
+            if target_date.tz is not None:
+                target_date = target_date.tz_localize(None)
+            
             start_date = target_date - timedelta(days=90)  # 90 days prior
             end_date = target_date + timedelta(days=30)  # 30 days after
             
@@ -524,41 +527,48 @@ Reasoning: [brief explanation]
             stock_data = ticker.history(start=start_date, end=end_date)
             
             if stock_data.empty:
-                return None
+                return {'symbol': symbol, 'date': date, 'has_market_data': False, 
+                        'price_at_earnings': None, 'return_1week': None, 'return_1month': None}
             
-            # Get price at earnings date
-            earnings_price = stock_data.loc[stock_data.index >= target_date].iloc[0]['Close'] if len(stock_data.loc[stock_data.index >= target_date]) > 0 else None
+            # Convert index to timezone-naive for comparison
+            stock_data.index = stock_data.index.tz_localize(None) if stock_data.index.tz is not None else stock_data.index
+            
+            # Find closest price to earnings date using get_indexer
+            closest_idx = stock_data.index.get_indexer([target_date], method='nearest')[0]
+            if closest_idx >= 0 and closest_idx < len(stock_data):
+                earnings_price = stock_data.iloc[closest_idx]['Close']
+            else:
+                return {'symbol': symbol, 'date': date, 'has_market_data': False,
+                        'price_at_earnings': None, 'return_1week': None, 'return_1month': None}
             
             # Calculate returns
-            if earnings_price and len(stock_data) > 30:
-                pre_earnings_price = stock_data.loc[stock_data.index < target_date].iloc[-1]['Close']
-                post_earnings_prices = stock_data.loc[stock_data.index > target_date]
-                
-                if len(post_earnings_prices) >= 5:
-                    week_later_price = post_earnings_prices.iloc[4]['Close']
-                    week_return = ((week_later_price - earnings_price) / earnings_price) * 100
-                else:
-                    week_return = None
-                
-                if len(post_earnings_prices) >= 20:
-                    month_later_price = post_earnings_prices.iloc[19]['Close']
-                    month_return = ((month_later_price - earnings_price) / earnings_price) * 100
-                else:
-                    month_return = None
-            else:
-                week_return = None
-                month_return = None
+            week_return = None
+            month_return = None
             
-            # Fetch S&P 500 for relative performance
-            spy = yf.Ticker('SPY')
-            spy_data = spy.history(start=start_date, end=end_date)
+            # Get dates after earnings
+            dates_after = stock_data.index[stock_data.index > target_date]
+            
+            if len(dates_after) > 0:
+                # 1-week return (7 days after)
+                week_target = target_date + timedelta(days=7)
+                week_idx = stock_data.index.get_indexer([week_target], method='nearest')[0]
+                if week_idx >= 0 and week_idx < len(stock_data) and stock_data.index[week_idx] > target_date:
+                    week_price = stock_data.iloc[week_idx]['Close']
+                    week_return = ((week_price - earnings_price) / earnings_price) * 100
+                
+                # 1-month return (30 days after)
+                month_target = target_date + timedelta(days=30)
+                month_idx = stock_data.index.get_indexer([month_target], method='nearest')[0]
+                if month_idx >= 0 and month_idx < len(stock_data) and stock_data.index[month_idx] > target_date:
+                    month_price = stock_data.iloc[month_idx]['Close']
+                    month_return = ((month_price - earnings_price) / earnings_price) * 100
             
             market_context = {
                 'symbol': symbol,
                 'date': date,
                 'price_at_earnings': float(earnings_price) if earnings_price else None,
-                'return_1week': round(week_return, 2) if week_return else None,
-                'return_1month': round(month_return, 2) if month_return else None,
+                'return_1week': round(week_return, 2) if week_return is not None else None,
+                'return_1month': round(month_return, 2) if month_return is not None else None,
                 'has_market_data': True
             }
             
@@ -566,7 +576,8 @@ Reasoning: [brief explanation]
             
         except Exception as e:
             print(f"    Warning: Could not fetch market data for {symbol}: {e}")
-            return {'symbol': symbol, 'date': date, 'has_market_data': False}
+            return {'symbol': symbol, 'date': date, 'has_market_data': False,
+                    'price_at_earnings': None, 'return_1week': None, 'return_1month': None}
     
     def score_sentiment(self, text: str, symbol: str = None, date: str = None, use_simple: bool = False) -> any:
         """Score sentiment - either simple or comprehensive"""
