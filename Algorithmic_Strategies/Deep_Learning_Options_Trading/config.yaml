@@ -10,6 +10,16 @@ data:
   end_date: "2023-12-31"
   min_volume: 100  # Minimum option volume threshold
   min_open_interest: 50  # Minimum open interest threshold
+  
+  # Options data source: 'databento', 'polygon', or 'synthetic'
+  options_source: "databento"  # Databento provides high-quality options data
+  
+  # Databento configuration
+  databento_api_key: "db-hXRTnkuYcQH9QD6JUsvW8tfCmivTY"
+  
+  # Polygon.io configuration (backup)
+  polygon_api_key: "LmyZcrXv3oxrhByxuG8PnAEr3ROZ10FA"
+  polygon_rate_limit: 5  # API calls per minute (free tier limit)
 
 features:
   # Feature engineering parameters
