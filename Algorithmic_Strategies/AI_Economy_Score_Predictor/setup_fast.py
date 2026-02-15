@@ -61,7 +61,7 @@ def main():
     
     # Install dependencies
     print("\n[3/4] Installing other dependencies...")
-    run_command("pip install -r requirements_fast.txt", "Installing dependencies")
+    run_command("pip install -r requirements.txt", "Installing dependencies")
     
     # Verify installation
     print("\n[4/4] Verifying installation...")
