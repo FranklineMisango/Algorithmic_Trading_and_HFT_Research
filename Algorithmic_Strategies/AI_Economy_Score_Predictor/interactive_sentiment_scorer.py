@@ -710,22 +710,55 @@ Reasoning: [brief explanation]
         """Save scored results"""
         print("\n[4/5] Saving Results...")
         
+        # Determine if comprehensive mode
+        is_comprehensive = 'overall_sentiment' in df.columns
+        
+        # Ask for format
+        if is_comprehensive:
+            print("\nOutput format:")
+            print("1. Parquet (recommended: 3-5x faster, 50% smaller)")
+            print("2. CSV (human-readable)")
+            format_choice = input("\nSelect format (1/2) [default: 1]: ").strip()
+            use_parquet = format_choice != "2"
+        else:
+            use_parquet = False  # CSV for simple mode
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_path = f"sentiment_scores_{timestamp}.csv"
+        
+        if use_parquet:
+            default_path = f"sentiment_scores_{timestamp}.parquet"
+        else:
+            default_path = f"sentiment_scores_{timestamp}.csv"
         
         save_path = input(f"Enter output file path (default: {default_path}): ").strip() or default_path
         
-        # Save main CSV
-        df.to_csv(save_path, index=False)
-        print(f"✓ Results saved to: {save_path}")
+        # Remove detailed_results column from main export (too large for CSV)
+        df_export = df.copy()
+        has_detailed = False
+        if 'detailed_results' in df_export.columns:
+            detailed_results = df_export['detailed_results'].copy()
+            df_export = df_export.drop(columns=['detailed_results'])
+            has_detailed = True
+        
+        # Save main file
+        print(f"\nSaving {'parquet' if use_parquet else 'CSV'} file...")
+        if use_parquet:
+            df_export.to_parquet(save_path, index=False, compression='snappy')
+        else:
+            df_export.to_csv(save_path, index=False)
+        
+        file_size = os.path.getsize(save_path) / (1024 * 1024)  # MB
+        print(f"✓ Results saved to: {save_path} ({file_size:.2f} MB)")
         
         # Also save summary statistics
-        summary_path = save_path.replace('.csv', '_summary.json')
+        summary_path = save_path.replace('.parquet', '_summary.json').replace('.csv', '_summary.json')
         
         summary = {
             'total_texts': len(df),
             'timestamp': timestamp,
-            'model': self.model_name
+            'model': self.model_name,
+            'output_format': 'parquet' if use_parquet else 'csv',
+            'file_size_mb': round(file_size, 2)
         }
         
         # Add appropriate summary stats based on scoring mode
@@ -746,8 +779,10 @@ Reasoning: [brief explanation]
                 valid_returns = df['return_1week'].dropna()
                 if len(valid_returns) > 0:
                     summary['market_data'] = {
+                        'records_with_market_data': int((~df['return_1week'].isna()).sum()),
                         'avg_1week_return': float(valid_returns.mean()),
-                        'avg_1month_return': float(df['return_1month'].dropna().mean()) if 'return_1month' in df.columns else None
+                        'avg_1month_return': float(df['return_1month'].dropna().mean()) if 'return_1month' in df.columns else None,
+                        'sentiment_return_correlation_1week': float(df[['overall_sentiment', 'return_1week']].corr().iloc[0, 1]) if len(valid_returns) > 10 else None
                     }
         else:
             summary['scoring_mode'] = 'simple'
@@ -760,12 +795,19 @@ Reasoning: [brief explanation]
         print(f"✓ Summary saved to: {summary_path}")
         
         # Save detailed results if comprehensive mode
-        if 'detailed_results' in df.columns:
-            detailed_path = save_path.replace('.csv', '_detailed.jsonl')
+        if has_detailed:
+            detailed_path = save_path.replace('.parquet', '_detailed.jsonl').replace('.csv', '_detailed.jsonl')
+            print(f"\nSaving detailed chain-of-thought results...")
             with open(detailed_path, 'w') as f:
-                for _, row in df.iterrows():
-                    f.write(row['detailed_results'] + '\n')
-            print(f"✓ Detailed results saved to: {detailed_path}")
+                for result in detailed_results:
+                    f.write(result + '\n')
+            detailed_size = os.path.getsize(detailed_path) / (1024 * 1024)
+            print(f"✓ Detailed results saved to: {detailed_path} ({detailed_size:.2f} MB)")
+        
+        # Print format comparison info
+        if use_parquet:
+            print(f"\n💡 To read parquet: pd.read_parquet('{save_path}')")
+            print(f"   Parquet is 3-5x faster to read than CSV for analysis!")
     
     def run(self):
         """Main execution flow"""
