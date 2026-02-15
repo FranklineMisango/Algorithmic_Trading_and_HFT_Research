@@ -339,7 +339,7 @@ class OptionsDataAcquisition:
                 continue
         
         if not all_options:
-            self.logger.warning("No options data fetched from Databento - falling back to synthetic")
+            self.logger.error("No options data fetched from Databento - NO SYNTHETIC FALLBACK ALLOWED")
             return None
         
         # DEBUG: Check columns before concat
@@ -515,22 +515,21 @@ class OptionsDataAcquisition:
         if underlying_prices.empty:
             raise ValueError("Failed to fetch underlying price data")
 
-        # Fetch or generate options data based on config
-        options_source = self.config['data'].get('options_source', 'synthetic')
+        # Fetch REAL options data ONLY - NO SYNTHETIC FALLBACK
+        options_source = self.config['data'].get('options_source', 'polygon')
         
         if options_source == 'databento':
             self.logger.info("Using Databento for real options data")
             options_data = self.fetch_databento_options_data(underlying_prices)
-            # Fallback to synthetic if Databento fails
             if options_data is None or options_data.empty:
-                self.logger.warning("Databento returned no data, falling back to synthetic")
-                options_data = self.generate_synthetic_options_data(underlying_prices)
+                raise ValueError("Databento returned no options data. NO SYNTHETIC FALLBACK ALLOWED.")
         elif options_source == 'polygon':
             self.logger.info("Using Polygon.io for real options data")
             options_data = self.fetch_real_options_data(underlying_prices)
+            if options_data is None or options_data.empty:
+                raise ValueError("Polygon returned no options data. NO SYNTHETIC FALLBACK ALLOWED.")
         else:
-            self.logger.info("Using synthetic options data")
-            options_data = self.generate_synthetic_options_data(underlying_prices)
+            raise ValueError(f"Invalid options_source: {options_source}. Must be 'databento' or 'polygon'. NO SYNTHETIC DATA ALLOWED.")
 
         # Save to disk
         self._save_data(underlying_prices, options_data)
@@ -551,7 +550,6 @@ class OptionsDataAcquisition:
 
 
 if __name__ == "__main__":
-    # Example usage
     acquirer = OptionsDataAcquisition()
     prices, options = acquirer.fetch_full_dataset()
     print(f"Fetched {len(prices)} price records and {len(options)} options records")

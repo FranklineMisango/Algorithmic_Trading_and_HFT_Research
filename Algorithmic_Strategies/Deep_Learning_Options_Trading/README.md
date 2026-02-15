@@ -1,6 +1,6 @@
 # Deep Learning for Delta-Neutral Options Trading
 
-Implementation of a systematic options trading strategy using LSTM neural networks to optimize delta-neutral straddle positions on S&P 100 constituents, based on the Quant Radio podcast episode "Deep Learning for Options Trading."
+Implementation of a systematic options trading strategy using LSTM neural networks to optimize delta-neutral straddle positions on S&P 100 constituents
 
 ## Strategy Overview
 
