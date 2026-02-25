@@ -26,15 +26,40 @@ def load_raw_data():
     prices['date'] = pd.to_datetime(prices['date'])
     logger.info(f"Loaded {len(prices)} underlying price records")
     
-    # Load options
-    options = pd.read_csv('data/options_data/options_data.csv')
-    options['date'] = pd.to_datetime(options['date'])
+    # Load options - combine all ticker-specific files
+    import glob
+    options_files = glob.glob('data/options_data/*_Options_Data.csv')
+    
+    if not options_files:
+        raise FileNotFoundError("No options data files found in data/options_data/")
+    
+    logger.info(f"Found {len(options_files)} options data files")
+    
+    dfs = []
+    for file in options_files:
+        df = pd.read_csv(file)
+        logger.info(f"  Loaded {Path(file).name}: {len(df)} records")
+        dfs.append(df)
+    
+    options = pd.concat(dfs, ignore_index=True)
+    
+    # Handle date column - check for ts_event or date
+    if 'ts_event' in options.columns:
+        options['date'] = pd.to_datetime(options['ts_event'])
+    elif 'date' in options.columns:
+        options['date'] = pd.to_datetime(options['date'])
+    else:
+        raise ValueError("No timestamp column (ts_event or date) found in options data")
     
     # Remove timezone if present (to match underlying prices)
     if hasattr(options['date'].dtype, 'tz') and options['date'].dtype.tz is not None:
         options['date'] = options['date'].dt.tz_localize(None)
     
-    logger.info(f"Loaded {len(options)} option records")
+    # Extract ticker from symbol if not present
+    if 'ticker' not in options.columns and 'symbol' in options.columns:
+        options['ticker'] = options['symbol'].str.strip().str.split().str[0]
+    
+    logger.info(f"Loaded {len(options)} total option records from {len(options_files)} files")
     
     return prices, options
 
