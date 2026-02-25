@@ -220,7 +220,3 @@ After running the full pipeline, results are available in:
 ## Disclaimer
 
 This implementation is for research and educational purposes. The strategy is based on experimental academic research and should not be considered investment advice. Past performance does not guarantee future results. Always conduct thorough due diligence and risk assessment before deploying any trading strategy with real capital.
-
----
-
-*"This research is really exciting... but it's still experimental... it's not like a get-rich quick scheme"* - Quant Radio
