@@ -23,13 +23,16 @@ class OptionsDataset(Dataset):
     def __init__(self, X: np.ndarray, y: np.ndarray, metadata: list = None):
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
-        self.metadata = metadata or []
+        self.metadata = metadata
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.y[idx], self.metadata[idx] if self.metadata else None
+        if self.metadata and idx < len(self.metadata):
+            return self.X[idx], self.y[idx], self.metadata[idx]
+        else:
+            return self.X[idx], self.y[idx], {}
 
 class LSTMPortfolioOptimizer(nn.Module):
     """
@@ -148,6 +151,11 @@ class DeepLearningOptionsTrader:
 
     def _setup_logging(self):
         """Setup logging configuration."""
+        # Create logs directory if it doesn't exist
+        from pathlib import Path
+        log_file = Path(self.config['logging']['file'])
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        
         logging.basicConfig(
             level=getattr(logging, self.config['logging']['level']),
             format=self.config['logging']['format'],
