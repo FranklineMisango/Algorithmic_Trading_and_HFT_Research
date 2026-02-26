@@ -269,7 +269,7 @@ class NoiseAreaCalculator:
         return data
 
 
-def visualize_noise_area(data: pd.DataFrame, symbol: str, start_idx: int = 0, end_idx: int = 500, config: dict = None):
+def visualize_noise_area(data: pd.DataFrame, symbol: str, start_idx: int = 0, end_idx: int = 500000, config: dict = None):
     """
     Visualize noise area with price action.
 
@@ -347,7 +347,25 @@ def visualize_noise_area(data: pd.DataFrame, symbol: str, start_idx: int = 0, en
     plot_data.drop(columns=['_date', '_sess_open', '_u_range', '_l_range'], inplace=True)
 
     # ------------------------------------------------------------------
-    # 5. Plot
+    # 5. Auto-resample to daily bars when the window is large
+    #    (>5,000 intraday bars ≈ >2.5 months of 5-min data)
+    #    This keeps the chart readable for multi-year views.
+    # ------------------------------------------------------------------
+    _intraday = len(plot_data) > 5000
+    if _intraday:
+        agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
+        for col in ('daily_upper', 'daily_lower', 'upper_boundary', 'lower_boundary'):
+            if col in plot_data.columns:
+                agg_dict[col] = 'mean'
+        for col in ('break_above', 'break_below', 'inside_noise'):
+            if col in plot_data.columns:
+                agg_dict[col] = 'any'
+        plot_data = plot_data.resample('1B').agg(agg_dict)
+        plot_data = plot_data.dropna(subset=['Close'])
+        print(f"  [{symbol}] Resampled to {len(plot_data):,} daily bars for overview chart")
+
+    # ------------------------------------------------------------------
+    # 6. Plot
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(16, 8))
 
@@ -376,15 +394,17 @@ def visualize_noise_area(data: pd.DataFrame, symbol: str, start_idx: int = 0, en
     if 'break_above' in plot_data.columns:
         breaks_up = plot_data[plot_data['break_above']]
         if len(breaks_up):
+            marker_size = 30 if _intraday else 80
             ax.scatter(breaks_up.index, breaks_up['High'],
-                       color='limegreen', marker='^', s=80,
+                       color='limegreen', marker='^', s=marker_size,
                        label=f'Breakout Up ({len(breaks_up)})', zorder=5, alpha=0.9)
 
     if 'break_below' in plot_data.columns:
         breaks_dn = plot_data[plot_data['break_below']]
         if len(breaks_dn):
+            marker_size = 30 if _intraday else 80
             ax.scatter(breaks_dn.index, breaks_dn['Low'],
-                       color='crimson', marker='v', s=80,
+                       color='crimson', marker='v', s=marker_size,
                        label=f'Breakout Down ({len(breaks_dn)})', zorder=5, alpha=0.9)
 
     ax.set_title(f'{symbol} — Noise Area & Breakouts  '
@@ -395,7 +415,17 @@ def visualize_noise_area(data: pd.DataFrame, symbol: str, start_idx: int = 0, en
     ax.set_ylabel('Price')
     ax.legend(loc='upper left', fontsize=9)
     ax.grid(True, alpha=0.25)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
+
+    # Choose date format based on timespan
+    span_days = (plot_data.index[-1] - plot_data.index[0]).days
+    if span_days > 365 * 2:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+        ax.xaxis.set_major_locator(mdates.YearLocator())
+    elif span_days > 180:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
+    else:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
     fig.autofmt_xdate()
 
     plt.tight_layout()

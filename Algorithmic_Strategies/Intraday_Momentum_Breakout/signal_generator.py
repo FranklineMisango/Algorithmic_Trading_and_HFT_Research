@@ -102,11 +102,13 @@ class SignalGenerator:
         recent_bars = data.iloc[idx - self.confirmation_bars + 1:idx + 1]
         
         if direction == 'long':
-            # All recent bars should be above upper boundary
-            confirmed = (recent_bars['Close'] > recent_bars['upper_boundary']).all()
+            # High pierced above the upper boundary on all recent bars
+            # (matches how break_above is defined: High > upper_boundary)
+            confirmed = (recent_bars['High'] > recent_bars['upper_boundary']).all()
         elif direction == 'short':
-            # All recent bars should be below lower boundary
-            confirmed = (recent_bars['Close'] < recent_bars['lower_boundary']).all()
+            # Low pierced below the lower boundary on all recent bars
+            # (matches how break_below is defined: Low < lower_boundary)
+            confirmed = (recent_bars['Low'] < recent_bars['lower_boundary']).all()
         else:
             confirmed = False
         
@@ -151,8 +153,13 @@ class SignalGenerator:
         bool
             True if timing is valid
         """
-        current_time = timestamp.time()
-        
+        # Convert to ET so the comparison works regardless of the index timezone
+        try:
+            ts_et = timestamp.tz_convert('America/New_York')
+        except (TypeError, AttributeError):
+            ts_et = timestamp  # already naive / already ET
+        current_time = ts_et.time()
+
         if allow_entry:
             # Can enter only before cutoff
             return self.session_start <= current_time < self.entry_cutoff
