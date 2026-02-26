@@ -13,7 +13,6 @@ Instruments:
 - NQ: E-mini Nasdaq-100 Futures
 """
 
-import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -94,8 +93,7 @@ class FuturesDataDownloader:
         
         except Exception as e:
             print(f"Error downloading ES data: {e}")
-            print("Generating synthetic ES data for testing...")
-            return self._generate_synthetic_data('ES', start, end)
+            raise
     
     def download_nq_futures(self, start: str, end: str) -> pd.DataFrame:
         """
@@ -142,8 +140,7 @@ class FuturesDataDownloader:
         
         except Exception as e:
             print(f"Error downloading NQ data: {e}")
-            print("Generating synthetic NQ data for testing...")
-            return self._generate_synthetic_data('NQ', start, end)
+            raise
     
     def _filter_trading_hours(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -177,70 +174,6 @@ class FuturesDataDownloader:
         rth_data = rth_data.drop(['hour', 'minute'], axis=1)
         
         return rth_data
-    
-    def _generate_synthetic_data(self, symbol: str, start: str, end: str) -> pd.DataFrame:
-        """
-        Generate synthetic data for testing.
-        
-        Parameters
-        ----------
-        symbol : str
-            Instrument symbol
-        start : str
-            Start date
-        end : str
-            End date
-            
-        Returns
-        -------
-        pd.DataFrame
-            Synthetic OHLCV data
-        """
-        print(f"Generating synthetic {symbol} data...")
-        
-        # Create date range for RTH only
-        dates = pd.date_range(start, end, freq='5min')
-        
-        # Filter to RTH hours
-        dates = dates[
-            ((dates.hour == 9) & (dates.minute >= 30)) |
-            ((dates.hour >= 10) & (dates.hour < 16)) |
-            ((dates.hour == 16) & (dates.minute == 0))
-        ]
-        
-        n = len(dates)
-        
-        # Base parameters by instrument
-        if symbol == 'ES':
-            base_price = 4500
-            volatility = 2
-            noise = 10
-        elif symbol == 'NQ':
-            base_price = 15000
-            volatility = 5
-            noise = 20
-        else:
-            base_price = 1000
-            volatility = 1
-            noise = 5
-        
-        # Generate price series with trend + noise
-        np.random.seed(42)
-        trend = np.cumsum(np.random.randn(n) * volatility)
-        price = base_price + trend + np.random.randn(n) * noise
-        
-        # Generate OHLC
-        data = pd.DataFrame({
-            'Open': price + np.random.randn(n) * noise * 0.2,
-            'High': price + abs(np.random.randn(n) * noise * 0.5),
-            'Low': price - abs(np.random.randn(n) * noise * 0.5),
-            'Close': price,
-            'Volume': np.random.randint(1000, 10000, n)
-        }, index=dates)
-        
-        print(f"  Generated {len(data)} bars")
-        
-        return data
     
     def download_all_data(self) -> Dict[str, pd.DataFrame]:
         """

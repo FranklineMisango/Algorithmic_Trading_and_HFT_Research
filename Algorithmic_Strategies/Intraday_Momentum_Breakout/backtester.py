@@ -590,32 +590,19 @@ def main():
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     
-    # Generate sample data
-    print("Generating sample data...")
-    dates = pd.date_range('2023-01-01 09:30', '2023-03-31 16:00', freq='5min')
-    n = len(dates)
-    
-    np.random.seed(42)
-    
-    # ES data
-    es_price = 4500 + np.cumsum(np.random.randn(n) * 2)
-    es_data = pd.DataFrame({
-        'Open': es_price + np.random.randn(n) * 2,
-        'High': es_price + abs(np.random.randn(n) * 5),
-        'Low': es_price - abs(np.random.randn(n) * 5),
-        'Close': es_price,
-        'Volume': np.random.randint(1000, 10000, n)
-    }, index=dates)
-    
-    # NQ data
-    nq_price = 15000 + np.cumsum(np.random.randn(n) * 5)
-    nq_data = pd.DataFrame({
-        'Open': nq_price + np.random.randn(n) * 5,
-        'High': nq_price + abs(np.random.randn(n) * 10),
-        'Low': nq_price - abs(np.random.randn(n) * 10),
-        'Close': nq_price,
-        'Volume': np.random.randint(1000, 10000, n)
-    }, index=dates)
+    # Load real data
+    print("Loading ES and NQ data...")
+    es_data = pd.read_csv(
+        'Data/ES_5min_RTH.csv',
+        index_col='ts_event',
+        parse_dates=True
+    )
+    nq_data = pd.read_csv(
+        'Data/NQ_5min_RTH.csv',
+        index_col='ts_event',
+        parse_dates=True
+    )
+    print(f"  ES: {len(es_data)} bars, NQ: {len(nq_data)} bars")
     
     # Process pipeline
     calculator = NoiseAreaCalculator(config)

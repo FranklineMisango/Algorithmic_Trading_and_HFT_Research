@@ -44,6 +44,10 @@ class SignalGenerator:
         self.confirmation_bars = self.entry_rules['confirmation_bars']
         self.volume_threshold = self.entry_rules['volume_threshold_percentile']
         
+        # Get trailing stop setting from exit config if not in entry_exit
+        self.trailing_stop_enabled = self.entry_rules.get('trailing_stop', 
+                                                           config['strategy']['exit'].get('trailing_stop_enabled', False))
+        
         # Session timing
         self.session_start = time(9, 30)  # 9:30 AM ET
         self.session_end = time(16, 0)    # 4:00 PM ET
@@ -281,7 +285,7 @@ class SignalGenerator:
                 continue
             
             # Check for trailing stop exit (if enabled)
-            if current_position != 0 and self.entry_rules['trailing_stop']:
+            if current_position != 0 and self.trailing_stop_enabled:
                 if current_position == 1:  # Long position
                     # Exit if price falls below lower boundary
                     if row['Close'] < row['lower_boundary']:
@@ -405,21 +409,14 @@ def main():
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     
-    # Generate sample data
-    print("Generating sample intraday data...")
-    dates = pd.date_range('2023-01-01 09:30', '2023-12-31 16:00', freq='5min')
-    n = len(dates)
-    
-    np.random.seed(42)
-    price = 4500 + np.cumsum(np.random.randn(n) * 2) + np.random.randn(n) * 10
-    
-    data = pd.DataFrame({
-        'Open': price + np.random.randn(n) * 2,
-        'High': price + abs(np.random.randn(n) * 5),
-        'Low': price - abs(np.random.randn(n) * 5),
-        'Close': price,
-        'Volume': np.random.randint(1000, 10000, n)
-    }, index=dates)
+    # Load real ES data
+    print("Loading ES data...")
+    data = pd.read_csv(
+        'Data/ES_5min_RTH.csv',
+        index_col='ts_event',
+        parse_dates=True
+    )
+    print(f"  Loaded {len(data)} bars")
     
     # Calculate noise area
     calculator = NoiseAreaCalculator(config)
@@ -439,8 +436,8 @@ def main():
     print(f"  Avg signal strength: {trades['signal_strength'].mean():.1f}")
     
     # Save
-    data.to_csv('results/signals_sample.csv')
-    print("\nSample signals saved to results/signals_sample.csv")
+    data.to_csv('results/signals_es.csv')
+    print("\nSignals saved to results/signals_es.csv")
 
 
 if __name__ == "__main__":

@@ -84,21 +84,35 @@ class NoiseAreaCalculator:
         # Group by date to get daily data
         data['date'] = pd.to_datetime(data.index.date)
         
-        # Calculate rolling percentiles of intraday range
-        # Use the maximum range per day, then roll over days
+        # Calculate daily max range
         daily_max_range = data.groupby('date')['range'].max()
         
-        # Expand back to intraday frequency
-        data['daily_max_range'] = data['date'].map(daily_max_range)
+        # Filter outliers using IQR method to handle corrupted data
+        q1 = daily_max_range.quantile(0.25)
+        q3 = daily_max_range.quantile(0.75)
+        iqr = q3 - q1
+        upper_fence = q3 + (3.0 * iqr)  # 3x IQR for futures volatility
         
-        # Calculate rolling statistics over lookback period
-        data['upper_range'] = data['daily_max_range'].rolling(
-            window=self.lookback, min_periods=self.lookback//2
+        # Cap extreme values
+        daily_max_range_clean = daily_max_range.clip(upper=upper_fence)
+        
+        outliers_pct = ((daily_max_range > upper_fence).sum() / len(daily_max_range)) * 100
+        print(f"  Filtered {outliers_pct:.1f}% outlier days (range > {upper_fence:.2f})")
+        
+        # Calculate rolling percentiles on DAILY data (not intraday)
+        # min_periods=1 so the very first trading day already has a boundary
+        # (uses however many days of history are available, growing to lookback)
+        daily_upper_range = daily_max_range_clean.rolling(
+            window=self.lookback, min_periods=1
         ).quantile(self.upper_pct / 100)
         
-        data['lower_range'] = data['daily_max_range'].rolling(
-            window=self.lookback, min_periods=self.lookback//2
+        daily_lower_range = daily_max_range_clean.rolling(
+            window=self.lookback, min_periods=1
         ).quantile(self.lower_pct / 100)
+        
+        # Expand back to intraday frequency (forward-fill within each day)
+        data['upper_range'] = data['date'].map(daily_upper_range)
+        data['lower_range'] = data['date'].map(daily_lower_range)
         
         # Calculate boundaries
         # Upper boundary: Current price + upper range threshold
@@ -240,9 +254,10 @@ class NoiseAreaCalculator:
         pd.DataFrame
             Data with breakout signals
         """
-        # Breakout conditions
-        data['break_above'] = data['Close'] > data['upper_boundary']
-        data['break_below'] = data['Close'] < data['lower_boundary']
+        # Breakout conditions - use High/Low for intraday breakout detection
+        # This checks if price ACTION breached boundaries during the bar
+        data['break_above'] = data['High'] > data['upper_boundary']
+        data['break_below'] = data['Low'] < data['lower_boundary']
         data['inside_noise'] = ~(data['break_above'] | data['break_below'])
         
         # Track when price re-enters noise area (momentum failure)
@@ -254,64 +269,135 @@ class NoiseAreaCalculator:
         return data
 
 
-def visualize_noise_area(data: pd.DataFrame, symbol: str, start_idx: int = 0, end_idx: int = 500):
+def visualize_noise_area(data: pd.DataFrame, symbol: str, start_idx: int = 0, end_idx: int = 500, config: dict = None):
     """
     Visualize noise area with price action.
-    
+
+    Shows daily-fixed noise area boundaries: at the first bar of each trading
+    day the session-open price ± daily range threshold is used as flat
+    horizontal levels for the whole day, so you can see price breaking out
+    of the zone visually.
+
     Parameters
     ----------
     data : pd.DataFrame
-        Data with noise area boundaries
+        Data with OHLCV columns (will calculate boundaries if not present)
     symbol : str
         Instrument symbol
     start_idx : int
-        Start index for visualization
+        Start index for visualization (within the valid / post-warmup rows)
     end_idx : int
         End index for visualization
+    config : dict, optional
+        Configuration dictionary for boundary calculation
     """
     import matplotlib.pyplot as plt
-    
-    # Slice data for visualization
-    plot_data = data.iloc[start_idx:end_idx]
-    
+    import matplotlib.dates as mdates
+
+    # ------------------------------------------------------------------
+    # 1. Ensure noise-area columns are present
+    # ------------------------------------------------------------------
+    if 'upper_boundary' not in data.columns:
+        if config is None:
+            try:
+                import yaml
+                with open('config.yaml', 'r') as f:
+                    config = yaml.safe_load(f)
+            except FileNotFoundError:
+                print(f"Warning: config.yaml not found. Cannot calculate boundaries for {symbol}.")
+                return
+        calculator = NoiseAreaCalculator(config)
+        data = calculator.calculate_noise_area(data.copy())
+        data = calculator.identify_breakouts(data)
+
+    # ------------------------------------------------------------------
+    # 2. Drop NaN warmup rows so start_idx=0 is the first *valid* bar
+    # ------------------------------------------------------------------
+    if 'upper_boundary' in data.columns:
+        valid_data = data.dropna(subset=['upper_boundary', 'lower_boundary']).copy()
+        if len(valid_data) == 0:
+            print(f"Warning: No valid boundary data for {symbol} — all NaN.")
+            return
+        skipped = len(data) - len(valid_data)
+        if skipped:
+            print(f"  Skipped {skipped:,} warmup bars (NaN boundaries) for {symbol}")
+    else:
+        valid_data = data.copy()
+
+    # ------------------------------------------------------------------
+    # 3. Slice the requested window
+    # ------------------------------------------------------------------
+    plot_data = valid_data.iloc[start_idx:end_idx].copy()
+
+    # ------------------------------------------------------------------
+    # 4. Build SESSION-FIXED boundaries
+    #    At the first bar of each trading day, pin the noise zone to the
+    #    session-open price ± that day's range thresholds.  Within the day
+    #    the band stays flat so breakouts are clearly visible.
+    # ------------------------------------------------------------------
+    plot_data['_date'] = plot_data.index.normalize()   # tz-aware midnight
+
+    # First bar of each day → session open and that day's range offsets
+    daily_first = plot_data.groupby('_date').first()[['Open', 'upper_range', 'lower_range']]
+    daily_first.columns = ['_sess_open', '_u_range', '_l_range']
+
+    plot_data = plot_data.join(daily_first, on='_date')
+    plot_data['daily_upper'] = plot_data['_sess_open'] + plot_data['_u_range']
+    plot_data['daily_lower'] = plot_data['_sess_open'] - plot_data['_l_range']
+    plot_data.drop(columns=['_date', '_sess_open', '_u_range', '_l_range'], inplace=True)
+
+    # ------------------------------------------------------------------
+    # 5. Plot
+    # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(16, 8))
-    
-    # Plot price
-    ax.plot(plot_data.index, plot_data['Close'], 
-            label='Close Price', color='black', linewidth=1.5, zorder=3)
-    
-    # Plot noise area boundaries
-    ax.plot(plot_data.index, plot_data['upper_boundary'], 
-            label='Upper Boundary', color='red', linestyle='--', alpha=0.7, zorder=2)
-    ax.plot(plot_data.index, plot_data['lower_boundary'], 
-            label='Lower Boundary', color='green', linestyle='--', alpha=0.7, zorder=2)
-    
-    # Fill noise area
-    ax.fill_between(plot_data.index, 
-                     plot_data['lower_boundary'], 
-                     plot_data['upper_boundary'],
-                     alpha=0.1, color='gray', label='Noise Area')
-    
-    # Mark breakouts
-    break_above = plot_data[plot_data['break_above']]
-    break_below = plot_data[plot_data['break_below']]
-    
-    if len(break_above) > 0:
-        ax.scatter(break_above.index, break_above['Close'], 
-                   color='green', marker='^', s=100, 
-                   label='Break Above', zorder=4, alpha=0.7)
-    
-    if len(break_below) > 0:
-        ax.scatter(break_below.index, break_below['Close'], 
-                   color='red', marker='v', s=100, 
-                   label='Break Below', zorder=4, alpha=0.7)
-    
-    ax.set_title(f'{symbol} - Noise Area & Breakouts', fontsize=14, fontweight='bold')
+
+    # Candlestick-style shading: High–Low range per bar (light background)
+    ax.fill_between(plot_data.index, plot_data['Low'], plot_data['High'],
+                    alpha=0.08, color='steelblue', label='Bar Range (H–L)')
+
+    # Close price spine
+    ax.plot(plot_data.index, plot_data['Close'],
+            label='Close', color='black', linewidth=1.2, zorder=3)
+
+    # Daily-fixed noise area boundaries
+    ax.plot(plot_data.index, plot_data['daily_upper'],
+            label='Upper Boundary (daily fixed)', color='red',
+            linestyle='--', linewidth=1.4, alpha=0.85, zorder=4)
+    ax.plot(plot_data.index, plot_data['daily_lower'],
+            label='Lower Boundary (daily fixed)', color='green',
+            linestyle='--', linewidth=1.4, alpha=0.85, zorder=4)
+
+    # Noise area fill (between daily-fixed levels)
+    ax.fill_between(plot_data.index,
+                    plot_data['daily_lower'], plot_data['daily_upper'],
+                    alpha=0.12, color='gold', label='Noise Area')
+
+    # Breakout markers
+    if 'break_above' in plot_data.columns:
+        breaks_up = plot_data[plot_data['break_above']]
+        if len(breaks_up):
+            ax.scatter(breaks_up.index, breaks_up['High'],
+                       color='limegreen', marker='^', s=80,
+                       label=f'Breakout Up ({len(breaks_up)})', zorder=5, alpha=0.9)
+
+    if 'break_below' in plot_data.columns:
+        breaks_dn = plot_data[plot_data['break_below']]
+        if len(breaks_dn):
+            ax.scatter(breaks_dn.index, breaks_dn['Low'],
+                       color='crimson', marker='v', s=80,
+                       label=f'Breakout Down ({len(breaks_dn)})', zorder=5, alpha=0.9)
+
+    ax.set_title(f'{symbol} — Noise Area & Breakouts  '
+                 f'({plot_data.index[0].strftime("%Y-%m-%d")} → '
+                 f'{plot_data.index[-1].strftime("%Y-%m-%d")})',
+                 fontsize=13, fontweight='bold')
     ax.set_xlabel('Time')
     ax.set_ylabel('Price')
-    ax.legend(loc='best')
-    ax.grid(True, alpha=0.3)
-    
+    ax.legend(loc='upper left', fontsize=9)
+    ax.grid(True, alpha=0.25)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
+    fig.autofmt_xdate()
+
     plt.tight_layout()
     plt.savefig(f'results/{symbol}_noise_area.png', dpi=150, bbox_inches='tight')
     print(f"\nNoise area visualization saved to results/{symbol}_noise_area.png")
@@ -328,24 +414,15 @@ def main():
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     
-    # Generate sample data (in real implementation, load actual futures data)
-    print("Generating sample intraday data...")
-    dates = pd.date_range('2023-01-01 09:30', '2023-12-31 16:00', freq='5min')
-    n = len(dates)
+    # Load real ES data
+    print("Loading ES data...")
+    data = pd.read_csv(
+        'Data/ES_5min_RTH.csv',
+        index_col='ts_event',
+        parse_dates=True
+    )
     
-    # Simulate price with noise and trends
-    np.random.seed(42)
-    price = 4500 + np.cumsum(np.random.randn(n) * 2) + np.random.randn(n) * 10
-    
-    data = pd.DataFrame({
-        'Open': price + np.random.randn(n) * 2,
-        'High': price + abs(np.random.randn(n) * 5),
-        'Low': price - abs(np.random.randn(n) * 5),
-        'Close': price,
-        'Volume': np.random.randint(1000, 10000, n)
-    }, index=dates)
-    
-    print(f"Sample data: {len(data)} bars")
+    print(f"Loaded {len(data)} bars")
     
     # Calculate noise area
     calculator = NoiseAreaCalculator(config)
@@ -363,8 +440,8 @@ def main():
     visualize_noise_area(data, 'ES', 0, 1000)
     
     # Save
-    data.to_csv('results/noise_area_sample.csv')
-    print("\nSample data saved to results/noise_area_sample.csv")
+    data.to_csv('results/noise_area_es.csv')
+    print("\nNoise area data saved to results/noise_area_es.csv")
 
 
 if __name__ == "__main__":
