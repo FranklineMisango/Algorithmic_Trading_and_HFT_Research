@@ -12,8 +12,8 @@ strategy:
   
   # Noise Area Calculation
   noise_area:
-    lookback_days: 90  # 90-day historical window (optimal per research)
-    # Alternative lookbacks for testing: [30, 60, 120]
+    lookback_days: 30  # 30-day historical window
+    # Alternative lookbacks for testing: [60, 90, 120]
     method: "percentile"  # Options: "percentile", "std_dev", "atr"
     
     # Percentile method (recommended)
@@ -22,6 +22,11 @@ strategy:
     
     # Standard deviation method (alternative)
     std_multiplier: 1.5  # Multiplier for std dev
+  
+  # Entry/Exit Rules (combined for signal generator)
+  entry_exit:
+    confirmation_bars: 1  # Number of bars to confirm breakout
+    volume_threshold_percentile: 50  # Minimum volume percentile for valid breakout
     
   # Entry Rules
   entry:
@@ -42,9 +47,85 @@ strategy:
     trailing_stop_enabled: true
     trailing_stop_type: "noise_boundary"  # Options: "noise_boundary", "vwap", "percent"
     trailing_stop_percent: 0.005  # 0.5% if using percent method
+  
+  # Position Sizing & Risk Management
+  position_sizing:
+    # Volatility targeting (CRITICAL)
+    method: "volatility_target"
+    target_daily_volatility: 3.0  # 3% daily portfolio volatility
+    
+    # Leverage constraints
+    max_leverage: 8.0  # Maximum 8x leverage
+    min_leverage: 1.0  # Minimum leverage
+    
+    # Position limits
+    max_contracts_per_instrument: 50  # Safety limit
+    
+    # Volatility estimation
+    volatility_estimation: "ewma"  # Options: "std", "ewma", "garch" 
+    vol_lookback: 20  # Days for volatility calculation
+    ewma_span: 20  # Span for EWMA volatility
+  
+  # Portfolio Allocation (from research findings)
+  portfolio:
+    # Optimal allocation per research
+    allocation:
+      NQ_momentum: 0.50  # 50% to NQ momentum strategy
+      ES_momentum: 0.25  # 25% to ES momentum strategy
+      NQ_long_only: 0.25  # 25% to static long NQ (trend exposure)
+    
+    initial_capital: 100000  # $100,000 starting capital
+    rebalance_frequency: "daily"  # Adjust allocations daily
+  
+  # Transaction Costs (CRITICAL - Conservative Assumptions)
+  transaction_costs:
+    # Commission (per contract, round-trip)
+    commission_per_contract: 4.20  # Typical futures commission
+    
+    # Slippage (in ticks)
+    slippage_ticks: 1.0  # Conservative: 1 tick slippage per side
+    # Research showed slippage significantly impacts returns
+    
+    # Instrument-specific tick data
+    ES:
+      tick_value: 12.50  # $12.50 per tick
+      tick_size: 0.25  # 0.25 point per tick
+    NQ:
+      tick_value: 5.00   # $5.00 per tick
+      tick_size: 0.25  # 0.25 point per tick
+    
+    # Order type (affects slippage)
+    order_type: "market"  # Options: "market", "limit", "adaptive"
+    limit_order_offset_ticks: 1  # If using limit orders
+  
+  # Risk Management
+  risk_management:
+    # Daily loss limits
+    max_daily_loss_pct: 0.05  # 5% max daily loss
+    max_daily_loss_absolute: 5000  # $5,000 max daily loss
+    
+    # Drawdown limits
+    max_drawdown_pct: 0.20  # Halt strategy at 20% drawdown
+    
+    # Margin requirements (per contract)
+    margin_requirements:
+      ES: 12000  # Approximate intraday margin
+      NQ: 16000  # Approximate intraday margin
+    
+    # Position monitoring
+    max_position_hold_hours: 6.5  # Max hours to hold (full session)
 
 # Data Parameters
 data:
+  # Instruments
+  instruments:
+    - symbol: "ES"
+      name: "E-mini S&P 500"
+      exchange: "CME"
+    - symbol: "NQ"
+      name: "E-mini NASDAQ-100"
+      exchange: "CME"
+  
   # Time range
   start_date: "2018-01-01"  # Strategy improves from 2018+ per research
   end_date: null  # null = today
@@ -62,82 +143,6 @@ data:
   min_volume: 1000  # Minimum volume per bar
   exclude_holidays: true
   exclude_half_days: true
-
-# Position Sizing & Risk Management
-position_sizing:
-  # Volatility targeting (CRITICAL)
-  method: "volatility_target"
-  target_daily_volatility: 0.03  # 3% daily portfolio volatility
-  
-  # Leverage constraints
-  max_leverage: 8.0  # Maximum 8x leverage
-  min_leverage: 1.0  # Minimum leverage
-  
-  # Position limits
-  max_contracts_per_instrument: 50  # Safety limit
-  
-  # Volatility estimation
-  vol_lookback: 20  # Days for volatility calculation
-  vol_method: "ewma"  # Options: "std", "ewma", "garch"
-  ewma_span: 20  # Span for EWMA volatility
-
-# Portfolio Allocation (from research findings)
-portfolio:
-  # Optimal allocation per research
-  allocations:
-    NQ_momentum: 0.50  # 50% to NQ momentum strategy
-    ES_momentum: 0.25  # 25% to ES momentum strategy
-    NQ_long_only: 0.25  # 25% to static long NQ (trend exposure)
-  
-  initial_capital: 100000  # $100,000 starting capital
-  
-  # Rebalancing
-  rebalance_frequency: "daily"  # Adjust allocations daily
-
-# Transaction Costs (CRITICAL - Conservative Assumptions)
-costs:
-  # Commission (per contract, round-trip)
-  commission_per_contract: 4.20  # Typical futures commission
-  
-  # Slippage (in ticks)
-  slippage_ticks: 1.0  # Conservative: 1 tick slippage per side
-  # Research showed slippage significantly impacts returns
-  
-  # Tick values
-  tick_values:
-    ES: 12.50  # $12.50 per tick
-    NQ: 5.00   # $5.00 per tick
-  
-  # Tick sizes
-  tick_sizes:
-    ES: 0.25  # 0.25 point per tick
-    NQ: 0.25  # 0.25 point per tick
-  
-  # Order type (affects slippage)
-  order_type: "market"  # Options: "market", "limit", "adaptive"
-  limit_order_offset_ticks: 1  # If using limit orders
-
-# Risk Management
-risk:
-  # Daily loss limits
-  max_daily_loss_pct: 0.05  # 5% max daily loss
-  max_daily_loss_absolute: 5000  # $5,000 max daily loss
-  
-  # Drawdown limits
-  max_drawdown_pct: 0.20  # Halt strategy at 20% drawdown
-  
-  # Regime filter (optional)
-  regime_filter_enabled: false
-  regime_filter_type: "vix"  # Pause when VIX < threshold
-  vix_threshold: 15
-  
-  # Position monitoring
-  max_position_hold_hours: 6.5  # Max hours to hold (full session)
-  
-  # Margin requirements (per contract)
-  margin_requirements:
-    ES: 12000  # Approximate intraday margin
-    NQ: 16000  # Approximate intraday margin
 
 # Backtesting
 backtest:
