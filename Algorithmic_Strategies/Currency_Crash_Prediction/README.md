@@ -54,14 +54,33 @@ Currency_Crash_Prediction/
 ```bash
 cd Algorithmic_Strategies/Currency_Crash_Prediction
 pip install -r requirements.txt
+
+# Optional: For Databento users (falls back to Yahoo Finance if not configured)
+cp .env.example .env
+# Edit .env and add your DATABENTO_API_KEY (optional - code will work without it)
 ```
 
 ## Usage
 
 ### 1. Data Collection
+
+#### Option A: Yahoo Finance (Free, Default)
 ```bash
-python data_fetcher.py --start 1999-01-01 --end 2023-12-31
+python data_fetcher.py --start 2006-06-01 --end 2023-12-31
 ```
+
+**Note:** Start date updated to 2006-06-01 as all 17 currencies have continuous data available from this date.
+
+#### Option B: Databento (Currently Unavailable for FX Data)
+```bash
+# Note: Databento does not currently provide FX spot data in their available datasets.
+# The --databento flag will attempt Databento first, then automatically fall back to Yahoo Finance.
+# This option is kept for future compatibility when FX data becomes available.
+
+python data_fetcher.py --start 2006-06-01 --end 2023-12-31 --databento
+```
+
+**Important:** Databento datasets currently do not include FX spot data. The code will automatically fall back to Yahoo Finance when using the --databento flag. Interest rates are fetched from FRED regardless of the data source.
 
 ### 2. Signal Generation
 ```python

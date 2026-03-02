@@ -4,11 +4,16 @@ Currency Crash Prediction Signal Generator
 import pandas as pd
 import numpy as np
 import yaml
+import os
 from loguru import logger
 
 
 class CurrencyCrashPredictor:
-    def __init__(self, config_path='config.yaml'):
+    def __init__(self, config_path=None):
+        if config_path is None:
+            # Default to config.yaml in the same directory as this script
+            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+        
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
@@ -21,9 +26,13 @@ class CurrencyCrashPredictor:
         self.interest_rates = None
         self.signals = None
     
-    def load_data(self, fx_path='data/fx_rates.csv', 
-                  rates_path='data/interest_rates.csv'):
+    def load_data(self, fx_path=None, rates_path=None):
         """Load FX and interest rate data"""
+        if fx_path is None:
+            fx_path = os.path.join(os.path.dirname(__file__), 'data', 'fx_rates.csv')
+        if rates_path is None:
+            rates_path = os.path.join(os.path.dirname(__file__), 'data', 'interest_rates.csv')
+            
         self.fx_rates = pd.read_csv(fx_path, index_col=0, parse_dates=True)
         self.interest_rates = pd.read_csv(rates_path, index_col=0, parse_dates=True)
         logger.info(f"Loaded {len(self.fx_rates)} months of data")

@@ -4,7 +4,7 @@ currencies:
     - JPY
     - GBP
     - CAD
-    - AUD
+    - AUD  
     - CHF
     - SEK
     - NOK
@@ -28,8 +28,8 @@ fx_threshold_percentile: 33    # Bottom 33% (lowest tertile)
 crash_threshold_percentile: 4  # Bottom 4%
 
 # Backtest Parameters
-start_date: "1999-01-01"
-end_date: "2023-12-31"
+start_date: "2007-06-01"  # All currencies have data from June 2006
+end_date: "2025-12-31"
 in_sample_end: "2018-12-31"
 out_sample_start: "2019-01-01"
 
