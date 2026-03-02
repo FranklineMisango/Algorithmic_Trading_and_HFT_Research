@@ -39,7 +39,7 @@ class PerformanceEvaluator:
     
     def calculate_returns(self, equity_curve: pd.DataFrame) -> pd.Series:
         """
-        Calculate returns from equity curve.
+        Calculate bar-level returns from equity curve (5-min bars).
         
         Parameters
         ----------
@@ -49,9 +49,27 @@ class PerformanceEvaluator:
         Returns
         -------
         pd.Series
-            Returns series
+            Returns series (5-min bar frequency)
         """
         return equity_curve['portfolio_value'].pct_change().fillna(0)
+
+    def calculate_daily_returns(self, equity_curve: pd.DataFrame) -> pd.Series:
+        """
+        Resample equity curve to business-daily frequency and compute returns.
+        Avoids the periods_per_year mismatch when equity curve has sub-daily bars.
+        
+        Parameters
+        ----------
+        equity_curve : pd.DataFrame
+            Equity curve with portfolio_value column
+            
+        Returns
+        -------
+        pd.Series
+            Daily returns series
+        """
+        daily_pv = equity_curve['portfolio_value'].resample('1B').last().dropna()
+        return daily_pv.pct_change().fillna(0)
     
     def calculate_sharpe_ratio(self, returns: pd.Series, periods_per_year: int = 252) -> float:
         """
@@ -164,6 +182,7 @@ class PerformanceEvaluator:
         float
             Calmar ratio
         """
+        # Use daily-based annual return: mean_daily_return × 252
         annual_return = returns.mean() * periods_per_year
         max_dd, _, _ = self.calculate_max_drawdown(equity_curve)
         
@@ -294,31 +313,40 @@ class PerformanceEvaluator:
         print("PERFORMANCE EVALUATION")
         print("="*60)
         
-        # Calculate returns
+        # Bar-level returns (5-min) — only used for intraday drawdown calculations
         returns = self.calculate_returns(equity_curve)
+        
+        # Daily returns — used for all annualized risk/return metrics to avoid
+        # the N_bars vs N_days mismatch (297 k 5-min bars ≠ 252 trading days)
+        daily_returns = self.calculate_daily_returns(equity_curve)
         
         # Calculate metrics
         metrics = {}
         
-        # Returns
-        total_return = (equity_curve['portfolio_value'].iloc[-1] / 
-                       equity_curve['portfolio_value'].iloc[0] - 1)
+        # Returns — CAGR using actual calendar-year span
+        start_val = equity_curve['portfolio_value'].iloc[0]
+        end_val   = equity_curve['portfolio_value'].iloc[-1]
+        total_return = end_val / start_val - 1
         metrics['total_return'] = total_return
-        metrics['annualized_return'] = ((1 + total_return) ** (252 / len(equity_curve)) - 1)
         
-        # Risk metrics
-        metrics['sharpe_ratio'] = self.calculate_sharpe_ratio(returns)
-        metrics['sortino_ratio'] = self.calculate_sortino_ratio(returns)
+        # True CAGR: (end/start)^(1/years) - 1
+        n_years = (equity_curve.index[-1] - equity_curve.index[0]).days / 365.25
+        metrics['n_years'] = n_years
+        metrics['annualized_return'] = (end_val / start_val) ** (1 / max(n_years, 1e-6)) - 1
+        
+        # Risk metrics — use daily returns so periods_per_year=252 is correct
+        metrics['sharpe_ratio'] = self.calculate_sharpe_ratio(daily_returns)
+        metrics['sortino_ratio'] = self.calculate_sortino_ratio(daily_returns)
         
         max_dd, peak_date, trough_date = self.calculate_max_drawdown(equity_curve)
         metrics['max_drawdown'] = max_dd
         metrics['max_drawdown_peak'] = peak_date
         metrics['max_drawdown_trough'] = trough_date
         
-        metrics['calmar_ratio'] = self.calculate_calmar_ratio(returns, equity_curve)
+        metrics['calmar_ratio'] = self.calculate_calmar_ratio(daily_returns, equity_curve)
         
-        # Volatility
-        metrics['annualized_volatility'] = returns.std() * np.sqrt(252)
+        # Annualized volatility — daily std × sqrt(252)
+        metrics['annualized_volatility'] = daily_returns.std() * np.sqrt(252)
         
         # Trade metrics
         if len(trades) > 0:
@@ -344,18 +372,18 @@ class PerformanceEvaluator:
         
         # Print metrics
         print("\nReturns:")
-        print(f"  Total Return: {metrics['total_return']*100:.2f}%")
-        print(f"  Annualized Return: {metrics['annualized_return']*100:.2f}%")
-        print(f"  Annualized Volatility: {metrics['annualized_volatility']*100:.2f}%")
+        print(f"  Total Return:         {metrics['total_return']*100:.2f}%  ({metrics['n_years']:.2f} years)")
+        print(f"  CAGR (annualized):    {metrics['annualized_return']*100:.2f}%")
+        print(f"  Annualized Volatility:{metrics['annualized_volatility']*100:.2f}%  (daily-based)")
         
         print("\nRisk-Adjusted Metrics:")
-        print(f"  Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
-        print(f"  Sortino Ratio: {metrics['sortino_ratio']:.2f}")
-        print(f"  Calmar Ratio: {metrics['calmar_ratio']:.2f}")
+        print(f"  Sharpe Ratio:  {metrics['sharpe_ratio']:.3f}  (daily-based)")
+        print(f"  Sortino Ratio: {metrics['sortino_ratio']:.3f}  (daily-based)")
+        print(f"  Calmar Ratio:  {metrics['calmar_ratio']:.3f}  (daily-based)")
         
         print("\nDrawdown:")
         print(f"  Max Drawdown: {metrics['max_drawdown']*100:.2f}%")
-        print(f"  Peak: {metrics['max_drawdown_peak']}")
+        print(f"  Peak:   {metrics['max_drawdown_peak']}")
         print(f"  Trough: {metrics['max_drawdown_trough']}")
         
         if len(trades) > 0:

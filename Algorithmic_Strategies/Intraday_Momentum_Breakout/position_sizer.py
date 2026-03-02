@@ -224,9 +224,12 @@ class PositionSizer:
         if instrument_vol == 0 or np.isnan(instrument_vol):
             return 0
         
+        # Convert annualized volatility to daily (instrument_vol is annualized, target_vol is daily)
+        daily_instrument_vol = instrument_vol / np.sqrt(252)
+        
         # Calculate target position size
         target_dollar_vol = self.target_vol * allocation_weight * portfolio_value
-        position_dollar_value = target_dollar_vol / instrument_vol
+        position_dollar_value = target_dollar_vol / daily_instrument_vol
         
         # Convert to contracts
         num_contracts = position_dollar_value / contract_value
@@ -339,52 +342,54 @@ class PositionSizer:
         print(f"  ES avg vol: {es_vol.mean()*100:.1f}%")
         print(f"  NQ avg vol: {nq_vol.mean()*100:.1f}%")
         
-        # Calculate position sizes
+        # Calculate position sizes — fully vectorized (no Python loops)
         print("\nCalculating position sizes...")
-        
+
+        def _vectorized_size(data, symbol, alloc_weight, direction_series=None):
+            """
+            Vectorized position sizing:
+              contracts = round( (target_vol * alloc * portfolio_value)
+                                 / (instrument_vol * price * multiplier) )
+            """
+            inst = next((i for i in self.instruments if i['symbol'] == symbol), None)
+            multiplier = inst.get('multiplier', 1) if inst else 1
+
+            contract_value = data['Close'] * multiplier
+            target_dollar_vol = self.target_vol * alloc_weight * portfolio_value
+
+            # Avoid div/0
+            vol = data['realized_vol'].replace(0, np.nan)
+            raw = target_dollar_vol / (vol * contract_value)
+            raw = raw.fillna(0)
+
+            sizes = raw.round().clip(0, self.max_contracts).astype(int)
+
+            if direction_series is not None:
+                # Zero-out bars where signal == 0
+                sizes = sizes.where(direction_series != 0, other=0)
+                sizes = sizes * direction_series.clip(-1, 1)
+
+            return sizes
+
         # ES momentum (25% allocation)
-        es_data['position_size'] = 0
-        for idx in range(len(es_data)):
-            row = es_data.iloc[idx]
-            if row['signal'] != 0 and not np.isnan(row['realized_vol']):
-                size = self.calculate_position_size_volatility_target(
-                    portfolio_value=portfolio_value,
-                    price=row['Close'],
-                    instrument_vol=row['realized_vol'],
-                    symbol='ES',
-                    allocation_weight=self.allocation['ES_momentum'] / 100
-                )
-                es_data.at[row.name, 'position_size'] = size * row['signal']
-        
+        es_data['position_size'] = _vectorized_size(
+            es_data, 'ES', self.allocation['ES_momentum'],
+            direction_series=es_data['signal']
+        )
+
         # NQ momentum (50% allocation)
         nq_momentum = nq_data.copy()
-        nq_momentum['position_size'] = 0
-        for idx in range(len(nq_momentum)):
-            row = nq_momentum.iloc[idx]
-            if row['signal'] != 0 and not np.isnan(row['realized_vol']):
-                size = self.calculate_position_size_volatility_target(
-                    portfolio_value=portfolio_value,
-                    price=row['Close'],
-                    instrument_vol=row['realized_vol'],
-                    symbol='NQ',
-                    allocation_weight=self.allocation['NQ_momentum'] / 100
-                )
-                nq_momentum.at[row.name, 'position_size'] = size * row['signal']
-        
-        # NQ long-only (25% allocation)
+        nq_momentum['position_size'] = _vectorized_size(
+            nq_momentum, 'NQ', self.allocation['NQ_momentum'],
+            direction_series=nq_momentum['signal']
+        )
+
+        # NQ long-only (25% allocation) — always long, every bar with valid vol
         nq_long = nq_data.copy()
-        nq_long['position_size'] = 0
-        for idx in range(len(nq_long)):
-            row = nq_long.iloc[idx]
-            if not np.isnan(row['realized_vol']) and row['realized_vol'] > 0:
-                size = self.calculate_position_size_volatility_target(
-                    portfolio_value=portfolio_value,
-                    price=row['Close'],
-                    instrument_vol=row['realized_vol'],
-                    symbol='NQ',
-                    allocation_weight=self.allocation['NQ_long_only'] / 100
-                )
-                nq_long.at[row.name, 'position_size'] = size  # Always long
+        nq_long['position_size'] = _vectorized_size(
+            nq_long, 'NQ', self.allocation['NQ_long_only'],
+            direction_series=None   # always long
+        )
         
         # Calculate leverage
         es_data['notional_value'] = abs(es_data['position_size']) * es_data['Close'] * 50
@@ -406,23 +411,36 @@ class PositionSizer:
                 ).round().astype(int)
                 data.loc[over_leveraged, 'leverage'] = self.max_leverage
         
-        # Statistics
+        # Statistics — report "when in position" for momentum, "all bars" for long-only
+        def _stats(data, label, always_on=False):
+            active = data[data['position_size'] != 0]
+            total  = len(data)
+            n_active = len(active)
+            pct_active = n_active / total * 100 if total else 0
+
+            if always_on:
+                avg_pos = data['position_size'].abs().mean()
+                avg_lev = data['leverage'].mean()
+            else:
+                avg_pos = active['position_size'].abs().mean() if n_active else 0.0
+                avg_lev = active['leverage'].mean()            if n_active else 0.0
+
+            max_pos = data['position_size'].abs().max()
+            max_lev = data['leverage'].max()
+
+            print(f"  {label}:")
+            if not always_on:
+                print(f"    Active bars:    {n_active:,} of {total:,} ({pct_active:.1f}%)")
+            print(f"    Avg size (when active): {avg_pos:.1f} contracts")
+            print(f"    Max size:        {max_pos:.0f} contracts")
+            print(f"    Avg leverage (when active): {avg_lev:.2f}x")
+            print(f"    Max leverage:    {max_lev:.2f}x")
+
         print("\nPosition Statistics:")
-        print(f"  ES momentum:")
-        print(f"    Avg position: {es_data['position_size'].abs().mean():.1f} contracts")
-        print(f"    Max position: {es_data['position_size'].abs().max():.0f} contracts")
-        print(f"    Avg leverage: {es_data['leverage'].mean():.2f}x")
-        
-        print(f"  NQ momentum:")
-        print(f"    Avg position: {nq_momentum['position_size'].abs().mean():.1f} contracts")
-        print(f"    Max position: {nq_momentum['position_size'].abs().max():.0f} contracts")
-        print(f"    Avg leverage: {nq_momentum['leverage'].mean():.2f}x")
-        
-        print(f"  NQ long-only:")
-        print(f"    Avg position: {nq_long['position_size'].abs().mean():.1f} contracts")
-        print(f"    Max position: {nq_long['position_size'].abs().max():.0f} contracts")
-        print(f"    Avg leverage: {nq_long['leverage'].mean():.2f}x")
-        
+        _stats(es_data,      "ES momentum")
+        _stats(nq_momentum,  "NQ momentum")
+        _stats(nq_long,      "NQ long-only", always_on=True)
+
         print("="*60)
         
         return {

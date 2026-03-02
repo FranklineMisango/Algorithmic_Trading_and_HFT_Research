@@ -43,10 +43,32 @@ class SignalGenerator:
         self.entry_rules = config['strategy']['entry_exit']
         self.confirmation_bars = self.entry_rules['confirmation_bars']
         self.volume_threshold = self.entry_rules['volume_threshold_percentile']
+        self.min_signal_strength = self.entry_rules.get('min_signal_strength', 0)
         
         # Get trailing stop setting from exit config if not in entry_exit
         self.trailing_stop_enabled = self.entry_rules.get('trailing_stop', 
                                                            config['strategy']['exit'].get('trailing_stop_enabled', False))
+        
+        # New exit option: opposite breakout
+        self.opposite_breakout_exit = config['strategy']['exit'].get('opposite_breakout_exit', False)
+        
+        # Profit target
+        self.profit_target_enabled = config['strategy']['exit'].get('profit_target_enabled', False)
+        self.profit_target_multiplier = config['strategy']['exit'].get('profit_target_multiplier', 2.0)
+        
+        # Short trades enabled
+        self.short_enabled = False  # Hardcoded for long-only
+        
+        # Trend filter
+        self.trend_filter_enabled = self.entry_rules.get('trend_filter_enabled', False)
+        self.trend_period = self.entry_rules.get('trend_period', 50)
+        
+        # Minimum hold before allowing momentum_failure exit (prevents fakeout spikes
+        # from being immediately exited on the very next bar)
+        self.min_hold_bars = config['strategy']['exit'].get('min_hold_bars', 3)
+        
+        # Maximum hold bars to prevent indefinite holding
+        self.max_hold_bars = self.entry_rules.get('max_hold_bars', 78)
         
         # Session timing
         self.session_start = time(9, 30)  # 9:30 AM ET
@@ -76,6 +98,31 @@ class SignalGenerator:
             lambda x: pd.Series(x).rank(pct=True).iloc[-1]
         )
         return volume_rank * 100
+    
+    def check_trend_filter(self, data: pd.DataFrame, idx: int) -> bool:
+        """
+        Check if price is above moving average for trend filter.
+        
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Data with price data
+        idx : int
+            Current bar index
+            
+        Returns
+        -------
+        bool
+            True if in uptrend or filter disabled
+        """
+        if not self.trend_filter_enabled:
+            return True
+        
+        if idx < self.trend_period:
+            return True  # Not enough data for MA
+        
+        ma = data['Close'].rolling(self.trend_period).mean()
+        return data.iloc[idx]['Close'] > ma.iloc[idx]
     
     def check_breakout_confirmation(self, data: pd.DataFrame, idx: int, direction: str) -> bool:
         """
@@ -262,34 +309,116 @@ class SignalGenerator:
         # Track position for exit logic
         current_position = 0
         entry_idx = None
+        current_date = None
+        entry_price = None
+        entry_upper = None
+        entry_lower = None
         
         print(f"Processing {len(data)} bars...")
         
         for idx in range(len(data)):
             row = data.iloc[idx]
             timestamp = row.name
+
+            # Convert to ET once per bar (avoids two tz_convert calls via check_session_timing)
+            try:
+                ts_et = timestamp.tz_convert('America/New_York')
+            except (TypeError, AttributeError):
+                ts_et = timestamp
+            current_time = ts_et.time()
+            bar_date = ts_et.date()
+            in_session = self.session_start <= current_time <= self.session_end
+            can_enter  = self.session_start <= current_time < self.entry_cutoff
+
+            # Detect first bar of new trading day - reset position tracking
+            if current_date is None or bar_date != current_date:
+                if current_position != 0:
+                    # Force exit if position carried over (shouldn't happen but safety check)
+                    data.at[row.name, 'exit_signal'] = True
+                    data.at[row.name, 'exit_reason'] = 'new_session'
+                    data.at[row.name, 'signal'] = 0
+                current_position = 0
+                entry_idx = None
+                current_date = bar_date
+                entry_price = None
+                entry_upper = None
+                entry_lower = None
             
-            # Check if we're in valid session
-            in_session = self.check_session_timing(timestamp, allow_entry=False)
-            can_enter = self.check_session_timing(timestamp, allow_entry=True)
-            
-            # Exit at session close
+            # Detect last bar of trading day using TIME (15:55 or later = last 5-min bar)
+            is_last_bar_of_day = current_time >= time(15, 55)
+
+            # Fallback: handle any bar that genuinely falls outside session hours
             if not in_session and current_position != 0:
                 data.at[row.name, 'exit_signal'] = True
                 data.at[row.name, 'exit_reason'] = 'session_close'
                 data.at[row.name, 'signal'] = 0
                 current_position = 0
                 entry_idx = None
+                entry_price = None
+                entry_upper = None
+                entry_lower = None
                 continue
             
             # Check for exit: momentum failure (price re-enters noise area)
-            if current_position != 0 and row['inside_noise']:
+            # Enforce minimum hold so a single fakeout spike doesn't exit immediately
+            bars_held = (idx - entry_idx) if entry_idx is not None else 0
+            if current_position != 0 and row['inside_noise'] and bars_held >= self.min_hold_bars:
                 data.at[row.name, 'exit_signal'] = True
                 data.at[row.name, 'exit_reason'] = 'momentum_failure'
                 data.at[row.name, 'signal'] = 0
                 current_position = 0
                 entry_idx = None
+                entry_price = None
+                entry_upper = None
+                entry_lower = None
                 continue
+            
+            # Check for max hold time exit (within same day)
+            if current_position != 0 and bars_held >= self.max_hold_bars:
+                data.at[row.name, 'exit_signal'] = True
+                data.at[row.name, 'exit_reason'] = 'max_hold_time'
+                data.at[row.name, 'signal'] = 0
+                current_position = 0
+                entry_idx = None
+                entry_price = None
+                entry_upper = None
+                entry_lower = None
+                continue
+            
+            # Force exit at session close BEFORE new entry logic
+            if is_last_bar_of_day and current_position != 0:
+                data.at[row.name, 'exit_signal'] = True
+                data.at[row.name, 'exit_reason'] = 'session_close'
+                data.at[row.name, 'signal'] = 0
+                current_position = 0
+                entry_idx = None
+                entry_price = None
+                entry_upper = None
+                entry_lower = None
+                continue
+            
+            # Check for opposite breakout exit (trend-following)
+            if current_position != 0 and self.opposite_breakout_exit and bars_held >= self.min_hold_bars:
+                if current_position == 1 and row['break_below']:
+                    data.at[row.name, 'exit_signal'] = True
+                    data.at[row.name, 'exit_reason'] = 'opposite_breakout'
+                    data.at[row.name, 'signal'] = 0
+                    current_position = 0
+                    entry_idx = None
+                    entry_price = None
+                    entry_upper = None
+                    entry_lower = None
+                    continue
+                elif current_position == -1 and row['break_above']:
+                    data.at[row.name, 'exit_signal'] = True
+                    data.at[row.name, 'exit_reason'] = 'opposite_breakout'
+                    data.at[row.name, 'signal'] = 0
+                    current_position = 0
+                    entry_idx = None
+                    entry_price = None
+                    entry_upper = None
+                    entry_lower = None
+                    continue
             
             # Check for trailing stop exit (if enabled)
             if current_position != 0 and self.trailing_stop_enabled:
@@ -301,6 +430,9 @@ class SignalGenerator:
                         data.at[row.name, 'signal'] = 0
                         current_position = 0
                         entry_idx = None
+                        entry_price = None
+                        entry_upper = None
+                        entry_lower = None
                         continue
                 elif current_position == -1:  # Short position
                     # Exit if price rises above upper boundary
@@ -310,6 +442,38 @@ class SignalGenerator:
                         data.at[row.name, 'signal'] = 0
                         current_position = 0
                         entry_idx = None
+                        entry_price = None
+                        entry_upper = None
+                        entry_lower = None
+                        continue
+            
+            # Check for profit target exit
+            if current_position != 0 and self.profit_target_enabled and bars_held >= self.min_hold_bars and entry_price is not None:
+                range_at_entry = entry_upper - entry_lower
+                target_pnl = self.profit_target_multiplier * range_at_entry
+                if current_position == 1:
+                    current_pnl = row['Close'] - entry_price
+                    if current_pnl >= target_pnl:
+                        data.at[row.name, 'exit_signal'] = True
+                        data.at[row.name, 'exit_reason'] = 'profit_target'
+                        data.at[row.name, 'signal'] = 0
+                        current_position = 0
+                        entry_idx = None
+                        entry_price = None
+                        entry_upper = None
+                        entry_lower = None
+                        continue
+                elif current_position == -1 and self.short_enabled:
+                    current_pnl = entry_price - row['Close']
+                    if current_pnl >= target_pnl:
+                        data.at[row.name, 'exit_signal'] = True
+                        data.at[row.name, 'exit_reason'] = 'profit_target'
+                        data.at[row.name, 'signal'] = 0
+                        current_position = 0
+                        entry_idx = None
+                        entry_price = None
+                        entry_upper = None
+                        entry_lower = None
                         continue
             
             # Entry logic (only if not in position and can enter)
@@ -318,25 +482,40 @@ class SignalGenerator:
                 if row['break_above']:
                     if self.check_breakout_confirmation(data, idx, 'long'):
                         if self.check_volume_confirmation(data, idx):
-                            signal_strength = self.calculate_signal_strength(data, idx, 'long')
-                            
-                            data.at[row.name, 'signal'] = 1
-                            data.at[row.name, 'signal_strength'] = signal_strength
-                            data.at[row.name, 'entry_signal'] = True
-                            current_position = 1
-                            entry_idx = idx
+                            if self.check_trend_filter(data, idx):
+                                signal_strength = self.calculate_signal_strength(data, idx, 'long')
+                                
+                                # Only enter if signal strength meets threshold
+                                if signal_strength >= self.min_signal_strength:
+                                    data.at[row.name, 'signal'] = 1
+                                    data.at[row.name, 'signal_strength'] = signal_strength
+                                    data.at[row.name, 'entry_signal'] = True
+                                    current_position = 1
+                                    entry_idx = idx
+                                    entry_price = row['Close']
+                                    entry_upper = row['upper_boundary']
+                                    entry_lower = row['lower_boundary']
+                                else:
+                                    data.at[row.name, 'signal_strength'] = signal_strength
                 
-                # Check for short signal
-                elif row['break_below']:
+                # Check for short signal (only if enabled)
+                elif self.short_enabled and row['break_below']:
                     if self.check_breakout_confirmation(data, idx, 'short'):
                         if self.check_volume_confirmation(data, idx):
                             signal_strength = self.calculate_signal_strength(data, idx, 'short')
                             
-                            data.at[row.name, 'signal'] = -1
-                            data.at[row.name, 'signal_strength'] = signal_strength
-                            data.at[row.name, 'entry_signal'] = True
-                            current_position = -1
-                            entry_idx = idx
+                            # Only enter if signal strength meets threshold
+                            if signal_strength >= self.min_signal_strength:
+                                data.at[row.name, 'signal'] = -1
+                                data.at[row.name, 'signal_strength'] = signal_strength
+                                data.at[row.name, 'entry_signal'] = True
+                                current_position = -1
+                                entry_idx = idx
+                                entry_price = row['Close']
+                                entry_upper = row['upper_boundary']
+                                entry_lower = row['lower_boundary']
+                            else:
+                                data.at[row.name, 'signal_strength'] = signal_strength
             
             # Maintain current position
             elif current_position != 0:

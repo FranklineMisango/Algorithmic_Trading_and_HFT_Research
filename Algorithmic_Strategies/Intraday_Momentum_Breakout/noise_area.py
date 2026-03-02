@@ -41,6 +41,9 @@ class NoiseAreaCalculator:
             self.lower_pct = config['strategy']['noise_area']['lower_percentile']
         elif self.method == 'std_dev':
             self.std_mult = config['strategy']['noise_area']['std_multiplier']
+        elif self.method == 'atr':
+            self.atr_period = config['strategy']['noise_area'].get('atr_period', 14)
+            self.atr_multiplier = config['strategy']['noise_area'].get('atr_multiplier', 1.5)
     
     def calculate_intraday_range(self, data: pd.DataFrame) -> pd.Series:
         """
@@ -80,10 +83,6 @@ class NoiseAreaCalculator:
         # Calculate intraday range
         data['range'] = self.calculate_intraday_range(data)
         
-        # Get trading days for proper lookback
-        # Group by date to get daily data
-        data['date'] = pd.to_datetime(data.index.date)
-        
         # Calculate daily max range
         daily_max_range = data.groupby('date')['range'].max()
         
@@ -114,13 +113,19 @@ class NoiseAreaCalculator:
         data['upper_range'] = data['date'].map(daily_upper_range)
         data['lower_range'] = data['date'].map(daily_lower_range)
         
-        # Calculate boundaries
-        # Upper boundary: Current price + upper range threshold
-        # Lower boundary: Current price - lower range threshold
-        data['upper_boundary'] = data['Close'] + data['upper_range']
-        data['lower_boundary'] = data['Close'] - data['lower_range']
+        # Anchor boundaries to SESSION OPEN (first bar's open each day), not current Close.
+        # This creates a FIXED intraday band — price must break out of yesterday's expected
+        # range to trigger a signal.  Using the rolling Close shifts the band with every tick,
+        # causing just-entered positions to immediately show as "inside_noise"
+        # and creating a spurious short bias (25th-pct lower threshold < 75th-pct upper).
+        data['session_open'] = (
+            data.groupby('date')['Open']
+                .transform('first')
+        )
+        data['upper_boundary'] = data['session_open'] + data['upper_range']
+        data['lower_boundary'] = data['session_open'] - data['lower_range']
         
-        print(f"  Calculated noise area for {len(data)} bars")
+        print(f"  Calculated noise area for {len(data)} bars (session-open anchored)")
         print(f"  Avg upper range: {data['upper_range'].mean():.2f}")
         print(f"  Avg lower range: {data['lower_range'].mean():.2f}")
         
@@ -178,6 +183,8 @@ class NoiseAreaCalculator:
             Data with upper_boundary and lower_boundary columns
         """
         print(f"Calculating noise area using ATR method ({self.lookback} days)...")
+        print(f"Data columns in ATR: {list(data.columns)}")
+        print(f"'date' in columns: {'date' in data.columns}")
         
         # Calculate True Range
         data['prev_close'] = data['Close'].shift(1)
@@ -188,16 +195,20 @@ class NoiseAreaCalculator:
         
         # Calculate ATR
         data['atr'] = data['true_range'].rolling(
-            window=self.lookback, min_periods=self.lookback//2
+            window=self.atr_period, min_periods=self.atr_period//2
         ).mean()
         
-        # Calculate boundaries
-        multiplier = 2.0  # Standard ATR multiplier
-        data['upper_boundary'] = data['Close'] + (data['atr'] * multiplier)
-        data['lower_boundary'] = data['Close'] - (data['atr'] * multiplier)
+        # Anchor boundaries to SESSION OPEN (first bar's open each day)
+        data['session_open'] = (
+            data.groupby('date')['Open']
+                .transform('first')
+        )
+        data['upper_boundary'] = data['session_open'] + (data['atr'] * self.atr_multiplier)
+        data['lower_boundary'] = data['session_open'] - (data['atr'] * self.atr_multiplier)
         
-        print(f"  Calculated noise area for {len(data)} bars")
+        print(f"  Calculated noise area for {len(data)} bars (session-open anchored)")
         print(f"  Avg ATR: {data['atr'].mean():.2f}")
+        print(f"  ATR multiplier: {self.atr_multiplier}")
         
         return data
     
@@ -218,6 +229,10 @@ class NoiseAreaCalculator:
         print("="*60)
         print("NOISE AREA CALCULATION")
         print("="*60)
+        
+        # Get trading days for proper grouping (needed for session_open anchoring)
+        data['date'] = data.index.floor('D')
+        print(f"Added 'date' column. Data columns: {list(data.columns)}")
         
         if self.method == 'percentile':
             data = self.calculate_noise_area_percentile(data)

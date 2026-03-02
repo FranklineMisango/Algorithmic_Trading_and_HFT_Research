@@ -101,3 +101,6 @@ secrets.yaml
 api_keys.yaml
 config.json
 *.config.yaml
+
+#Lean Backtester whole folder
+/LeanBacktester/

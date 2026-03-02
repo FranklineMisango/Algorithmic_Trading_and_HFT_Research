@@ -457,43 +457,80 @@ class Backtester:
             nq_long_bar = nq_long_data.loc[timestamp]
             
             # ES momentum strategy
-            if es_bar['entry_signal'] or es_bar['exit_signal']:
-                self.execute_trade(
-                    strategy_name='ES_momentum',
-                    symbol='ES',
-                    signal=int(es_bar['signal']),
-                    contracts=abs(int(es_bar['position_size'])),
-                    price=es_bar['Close'],
-                    timestamp=timestamp,
-                    reason=es_bar.get('exit_reason', 'entry')
-                )
+            # Handle exits explicitly (don't rely on position_size which is 0 on exits)
+            if es_bar['exit_signal']:
+                current_pos = self.positions.get('ES_momentum', {'contracts': 0})
+                if current_pos.get('contracts', 0) != 0:
+                    self._close_position(
+                        'ES_momentum', 
+                        es_bar['Close'], 
+                        timestamp, 
+                        es_bar.get('exit_reason', 'exit')
+                    )
+            # Handle entries
+            elif es_bar['entry_signal']:
+                target_size = abs(int(es_bar['position_size']))
+                if target_size > 0:
+                    self.execute_trade(
+                        strategy_name='ES_momentum',
+                        symbol='ES',
+                        signal=int(es_bar['signal']),
+                        contracts=target_size,
+                        price=es_bar['Close'],
+                        timestamp=timestamp,
+                        reason='entry'
+                    )
             
             # NQ momentum strategy
-            if nq_momentum_bar['entry_signal'] or nq_momentum_bar['exit_signal']:
-                self.execute_trade(
-                    strategy_name='NQ_momentum',
-                    symbol='NQ',
-                    signal=int(nq_momentum_bar['signal']),
-                    contracts=abs(int(nq_momentum_bar['position_size'])),
-                    price=nq_momentum_bar['Close'],
-                    timestamp=timestamp,
-                    reason=nq_momentum_bar.get('exit_reason', 'entry')
-                )
+            # Handle exits explicitly (don't rely on position_size which is 0 on exits)
+            if nq_momentum_bar['exit_signal']:
+                current_pos = self.positions.get('NQ_momentum', {'contracts': 0})
+                if current_pos.get('contracts', 0) != 0:
+                    self._close_position(
+                        'NQ_momentum', 
+                        nq_momentum_bar['Close'], 
+                        timestamp, 
+                        nq_momentum_bar.get('exit_reason', 'exit')
+                    )
+            # Handle entries
+            elif nq_momentum_bar['entry_signal']:
+                target_size = abs(int(nq_momentum_bar['position_size']))
+                if target_size > 0:
+                    self.execute_trade(
+                        strategy_name='NQ_momentum',
+                        symbol='NQ',
+                        signal=int(nq_momentum_bar['signal']),
+                        contracts=target_size,
+                        price=nq_momentum_bar['Close'],
+                        timestamp=timestamp,
+                        reason='entry'
+                    )
             
             # NQ long-only strategy (rebalance if position size changes significantly)
-            current_nq_long_pos = self.positions['NQ_long_only']['contracts']
-            target_nq_long_pos = abs(int(nq_long_bar['position_size']))
-            
-            if abs(target_nq_long_pos - current_nq_long_pos) > 1:  # Rebalance threshold
-                self.execute_trade(
-                    strategy_name='NQ_long_only',
-                    symbol='NQ',
-                    signal=1,  # Always long
-                    contracts=target_nq_long_pos,
-                    price=nq_long_bar['Close'],
-                    timestamp=timestamp,
-                    reason='rebalance'
-                )
+            # IMPORTANT: Skip if allocation is 0 to avoid ghost positions
+            nq_long_allocation = self.config['strategy']['portfolio']['allocation'].get('NQ_long_only', 0.0)
+            if nq_long_allocation > 0:
+                current_nq_long_pos = self.positions['NQ_long_only'].get('contracts', 0)
+                target_nq_long_pos = abs(int(nq_long_bar['position_size']))
+
+                if abs(target_nq_long_pos - current_nq_long_pos) > 1:  # Rebalance threshold
+                    # Close the existing long position first (records the trade properly)
+                    if current_nq_long_pos != 0:
+                        self._close_position('NQ_long_only', nq_long_bar['Close'], timestamp, 'rebalance')
+                    # Open a fresh long at the new target size
+                    if target_nq_long_pos > 0:
+                        entry_price = self.cost_model.apply_slippage_to_price(
+                            nq_long_bar['Close'], 'NQ', 'long', entry=True
+                        )
+                        slippage, commission, _ = self.cost_model.calculate_total_cost('NQ', target_nq_long_pos)
+                        self.cash -= (commission + slippage / 2)
+                        self.positions['NQ_long_only'] = {
+                            'symbol': 'NQ',
+                            'side': 'long',
+                            'contracts': target_nq_long_pos,
+                            'entry_price': entry_price,
+                            'entry_time': timestamp,
+                        }
             
             # Update portfolio value
             self.update_portfolio_value(portfolio_data, i)

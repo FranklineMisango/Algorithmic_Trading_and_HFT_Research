@@ -12,21 +12,30 @@ strategy:
   
   # Noise Area Calculation
   noise_area:
-    lookback_days: 30  # 30-day historical window
-    # Alternative lookbacks for testing: [60, 90, 120]
-    method: "percentile"  # Options: "percentile", "std_dev", "atr"
+    lookback_days: 20  # Reduced from 90 to 20 for more responsive boundaries
+    # Alternative lookbacks for testing: [10, 20, 30]
+    method: "percentile"  # Changed back for testing
     
-    # Percentile method (recommended)
-    upper_percentile: 75  # Upper noise boundary
-    lower_percentile: 25  # Lower noise boundary
+    # Percentile method (now secondary)
+    upper_percentile: 80
+    lower_percentile: 20
+    
+    # ATR method (now primary - more adaptive to current volatility)
+    atr_period: 14  # ATR lookback period
+    atr_multiplier: 1.5  # Multiplier for boundary width
     
     # Standard deviation method (alternative)
-    std_multiplier: 1.5  # Multiplier for std dev
+    std_multiplier: 1.5
   
   # Entry/Exit Rules (combined for signal generator)
   entry_exit:
-    confirmation_bars: 1  # Number of bars to confirm breakout
-    volume_threshold_percentile: 50  # Minimum volume percentile for valid breakout
+    confirmation_bars: 2  # Reduced from 3 to 2 for faster entries on confirmed breakouts
+    volume_threshold_percentile: 60  # Reduced from 70 to 60 for more trading opportunities
+    max_hold_bars: 78  # Maximum bars to hold position (1 trading day)
+    min_signal_strength: 40  # Reduced from 50 to 40 to capture more valid signals
+    short_enabled: false  # Disable short trades for long-only strategy
+    trend_filter_enabled: false  # Disable trend filter to allow trades in choppy markets
+    trend_period: 50  # 50-period moving average for trend filter
     
   # Entry Rules
   entry:
@@ -40,19 +49,29 @@ strategy:
     session_close: true
     session_close_time: "16:00"  # 4:00 PM ET (adjust for futures hours)
     
-    # Stop-loss: Momentum failure (price re-enters noise area)
+    # Stop-loss: Momentum failure (price re-enters noise area) - now secondary
     momentum_failure_stop: true
+    min_hold_bars: 50  # Increased from 20 to 50 to let winners run longer
     
-    # Trailing stop options
-    trailing_stop_enabled: true
-    trailing_stop_type: "noise_boundary"  # Options: "noise_boundary", "vwap", "percent"
-    trailing_stop_percent: 0.005  # 0.5% if using percent method
+    # NEW: Exit on opposite breakout (trend-following exit)
+    opposite_breakout_exit: false  # Disabled - momentum strategies shouldn't exit on reversals
+    
+    # Time-based exit to prevent holding positions indefinitely
+    max_hold_bars: 78  # Maximum 78 bars (1 trading day) to hold position
+    
+    # Trailing stop options - ENABLED
+    trailing_stop_enabled: true  # Enabled for better risk management
+    trailing_stop_percent: 0.01  # Increased from 0.005 to 1% for wider stops
+    
+    # Profit target exit
+    profit_target_enabled: true  # Exit when unrealized P&L reaches target
+    profit_target_multiplier: 1.5  # Target = 1.5x the noise area range
   
   # Position Sizing & Risk Management
   position_sizing:
     # Volatility targeting (CRITICAL)
     method: "volatility_target"
-    target_daily_volatility: 3.0  # 3% daily portfolio volatility
+    target_daily_volatility: 10.0  # Increased to 10% for high-volatility recent markets (ES/NQ ~100% vol)
     
     # Leverage constraints
     max_leverage: 8.0  # Maximum 8x leverage
@@ -68,22 +87,22 @@ strategy:
   
   # Portfolio Allocation (from research findings)
   portfolio:
-    # Optimal allocation per research
+    # Optimal allocation per research (adjusted for NQ-focused strategy)
     allocation:
-      NQ_momentum: 0.50  # 50% to NQ momentum strategy
-      ES_momentum: 0.25  # 25% to ES momentum strategy
-      NQ_long_only: 0.25  # 25% to static long NQ (trend exposure)
+      NQ_momentum: 0.95  # Increased to 95% for higher NQ exposure
+      ES_momentum: 0.05  # Reduced to 5%  
+      NQ_long_only: 0.0  # 0% to static long NQ (causing long-term holds)
     
-    initial_capital: 100000  # $100,000 starting capital
+    initial_capital: 2500000  # $2.5M starting capital (sized to trade 1 NQ contract at $20k+ prices)
     rebalance_frequency: "daily"  # Adjust allocations daily
   
   # Transaction Costs (CRITICAL - Conservative Assumptions)
   transaction_costs:
     # Commission (per contract, round-trip)
-    commission_per_contract: 4.20  # Typical futures commission
+    commission_per_contract: 2.0  # Reduced from 4.20 for testing
     
     # Slippage (in ticks)
-    slippage_ticks: 1.0  # Conservative: 1 tick slippage per side
+    slippage_ticks: 0.5  # Reduced from 1.0 for testing
     # Research showed slippage significantly impacts returns
     
     # Instrument-specific tick data
@@ -122,12 +141,16 @@ data:
     - symbol: "ES"
       name: "E-mini S&P 500"
       exchange: "CME"
+      multiplier: 50        # $50 per point
+      tick_size: 0.25       # Minimum price increment
     - symbol: "NQ"
       name: "E-mini NASDAQ-100"
       exchange: "CME"
+      multiplier: 20        # $20 per point
+      tick_size: 0.25       # Minimum price increment
   
   # Time range
-  start_date: "2018-01-01"  # Strategy improves from 2018+ per research
+  start_date: "2011-02-01"  # Strategy improves from 2018+ per research
   end_date: null  # null = today
   
   # Intraday frequency
