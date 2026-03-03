@@ -131,14 +131,23 @@ class AIPortfolioStrategy:
         print("STEP 4: GENERATING PORTFOLIO ALLOCATIONS")
         print("="*60)
         
-        # Predict returns for entire dataset
-        predicted_returns = self.ml_model.predict_returns(self.features)
+        # Only predict on test set to avoid look-ahead bias
+        test_features = self.features.loc[self.X_test.index]
         
-        # Calculate optimal allocations
-        self.allocations = self.ml_model.calculate_optimal_allocations(predicted_returns)
+        # Predict returns for test period only
+        predicted_returns = self.ml_model.predict_returns(test_features)
+        
+        # Calculate optimal allocations with risk parity
+        use_risk_parity = self.config.get('risk', {}).get('use_risk_parity', True)
+        self.allocations = self.ml_model.calculate_optimal_allocations(
+            predicted_returns,
+            historical_returns=self.returns,
+            use_risk_parity=use_risk_parity
+        )
         
         print(f"\nAllocations generated successfully")
         print(f"  - Allocations shape: {self.allocations.shape}")
+        print(f"  - Test period: {self.allocations.index[0]} to {self.allocations.index[-1]}")
         
         # Save allocations
         if self.config['output']['save_allocations']:
@@ -158,23 +167,27 @@ class AIPortfolioStrategy:
         print("STEP 5: RUNNING BACKTEST")
         print("="*60)
         
+        # Align returns and prices to test period
+        test_returns = self.returns.loc[self.allocations.index]
+        test_prices = self.prices.loc[self.allocations.index]
+        
         # Backtest AI strategy
         ai_results = self.backtester.backtest_strategy(
             self.allocations, 
-            self.returns, 
-            self.prices
+            test_returns, 
+            test_prices
         )
         
-        # Create benchmark strategies
+        # Create benchmark strategies for same period
         benchmark_results = self.backtester.create_benchmark_strategy(
-            self.returns, 
-            self.prices, 
+            test_returns, 
+            test_prices, 
             self.config['backtest']['benchmark']
         )
         
         traditional_6040_results = self.backtester.create_traditional_6040(
-            self.returns, 
-            self.prices
+            test_returns, 
+            test_prices
         )
         
         # Store results

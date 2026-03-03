@@ -27,7 +27,18 @@ class DataAcquisition:
         """
         self.config = config
         self.start_date = config['data']['start_date']
-        self.end_date = config['data']['end_date']
+        
+        # Ensure end_date is not in the future
+        config_end = config['data']['end_date']
+        today = datetime.now().date()
+        config_end_date = datetime.strptime(config_end, '%Y-%m-%d').date()
+        
+        # Allow dates up to today (March 3, 2026)
+        if config_end_date > today:
+            self.end_date = today.strftime('%Y-%m-%d')
+            print(f"Warning: end_date {config_end} is beyond today. Using: {self.end_date}")
+        else:
+            self.end_date = config_end
         
     def fetch_asset_prices(self) -> pd.DataFrame:
         """
@@ -62,7 +73,7 @@ class DataAcquisition:
             prices = data['Adj Close']
         
         # Fill missing values (forward fill then backward fill)
-        prices = prices.fillna(method='ffill').fillna(method='bfill')
+        prices = prices.ffill().bfill()
         
         print(f"Fetched prices for {len(tickers)} assets from {prices.index[0]} to {prices.index[-1]}")
         
@@ -190,7 +201,7 @@ class DataAcquisition:
         indicators = pd.concat([vix, yield_spread, interest_rate], axis=1)
         
         # Fill missing values
-        indicators = indicators.fillna(method='ffill').fillna(method='bfill')
+        indicators = indicators.ffill().bfill()
         
         print(f"\nIndicators summary:")
         print(indicators.describe())

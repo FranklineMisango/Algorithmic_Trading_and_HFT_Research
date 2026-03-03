@@ -2,8 +2,8 @@
 
 # Data Parameters
 data:
-  start_date: "2017-01-01"
-  end_date: "2024-12-31"
+  start_date: "2015-01-01"
+  end_date: "2025-12-31"
   lookback_period: 12  # months for model training
   rebalance_frequency: "M"  # Monthly rebalancing
   
@@ -27,29 +27,44 @@ indicators:
   vix:
     ticker: "^VIX"
     name: "CBOE Volatility Index"
-    description: "Market fear gauge"
   yield_spread:
-    long_term: "^TNX"  # 10-year Treasury yield
-    short_term: "^IRX"  # 13-week Treasury yield
+    long_term: "^TNX"
+    short_term: "^IRX"
     name: "Yield Spread"
-    description: "10Y - 3M Treasury spread"
   interest_rate:
-    ticker: "DFF"  # Federal Funds Rate
+    ticker: "DFF"
     name: "Fed Funds Rate"
-    description: "Primary interest rate"
-    source: "FRED"  # Federal Reserve Economic Data
+    source: "FRED"
+  dollar_index:
+    ticker: "DX-Y.NYB"
+    name: "US Dollar Index"
+  oil:
+    ticker: "CL=F"
+    name: "Crude Oil"
+  credit_spread:
+    high_yield: "HYG"
+    treasury: "TLT"
+    name: "Credit Spread"
 
 # Machine Learning Model
 model:
-  type: "DecisionTreeRegressor"
+  type: "RandomForestRegressor"
   parameters:
+    n_estimators: 100
     max_depth: 5
-    min_samples_split: 10
-    min_samples_leaf: 5
+    min_samples_split: 20
+    min_samples_leaf: 10
     random_state: 42
   validation:
-    test_size: 0.2
+    test_size: 0.25
     cv_folds: 5
+  
+# Risk Management
+risk:
+  use_risk_parity: true
+  max_drawdown_threshold: 0.15  # 15% stop-loss
+  rebalance_threshold: 0.05  # Only rebalance if drift > 5%
+  volatility_lookback: 12  # months for vol calculation
   
 # Portfolio Constraints
 portfolio:

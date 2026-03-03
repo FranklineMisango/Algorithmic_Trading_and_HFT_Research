@@ -186,25 +186,30 @@ class FeatureEngineer:
         Returns:
             DataFrame with all engineered features
         """
-        features = indicators.copy()
+        feature_list = [indicators.copy()]
         
         if include_lagged:
-            features = self.create_lagged_features(features)
+            lagged_feats = self.create_lagged_features(indicators)
+            feature_list.append(lagged_feats)
         
         if include_rolling:
-            features = self.create_rolling_features(indicators)
+            rolling_feats = self.create_rolling_features(indicators)
+            feature_list.append(rolling_feats)
         
         if include_changes:
             change_feats = self.create_change_features(indicators)
-            features = pd.concat([features, change_feats], axis=1)
+            feature_list.append(change_feats)
         
         if include_interactions:
             interaction_feats = self.create_interaction_features(indicators)
-            features = pd.concat([features, interaction_feats], axis=1)
+            feature_list.append(interaction_feats)
         
         if include_regimes:
             regime_feats = self.create_regime_features(indicators)
-            features = pd.concat([features, regime_feats], axis=1)
+            feature_list.append(regime_feats)
+        
+        # Concatenate all features
+        features = pd.concat(feature_list, axis=1)
         
         # Remove duplicate columns
         features = features.loc[:, ~features.columns.duplicated()]

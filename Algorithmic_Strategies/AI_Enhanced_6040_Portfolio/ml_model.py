@@ -8,9 +8,10 @@ predicting optimal portfolio allocations.
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, cross_val_score, TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.feature_selection import SelectKBest, f_regression
 import pickle
 import os
 
@@ -29,15 +30,23 @@ class PortfolioMLModel:
         self.models = {}  # One model per asset
         self.feature_importance = {}
         self.training_history = {}
+        self.feature_selector = None
         
         # Model parameters from config
         model_params = config['model']['parameters']
-        self.model_params = {
-            'max_depth': model_params['max_depth'],
-            'min_samples_split': model_params['min_samples_split'],
-            'min_samples_leaf': model_params['min_samples_leaf'],
-            'random_state': model_params['random_state']
-        }
+        self.model_type = config['model']['type']
+        
+        if self.model_type == 'RandomForestRegressor':
+            self.model_params = {
+                'n_estimators': model_params.get('n_estimators', 100),
+                'max_depth': model_params.get('max_depth', 5),
+                'min_samples_split': model_params.get('min_samples_split', 20),
+                'min_samples_leaf': model_params.get('min_samples_leaf', 10),
+                'random_state': model_params.get('random_state', 42),
+                'n_jobs': -1
+            }
+        else:
+            self.model_params = model_params
         
     def create_target_variables(self, 
                                 returns: pd.DataFrame,
@@ -91,9 +100,9 @@ class PortfolioMLModel:
     def train_model(self,
                    X_train: pd.DataFrame,
                    y_train: pd.Series,
-                   asset_name: str) -> DecisionTreeRegressor:
+                   asset_name: str) -> RandomForestRegressor:
         """
-        Train a decision tree model for a specific asset.
+        Train a Random Forest model for a specific asset.
         
         Args:
             X_train: Training features
@@ -105,21 +114,41 @@ class PortfolioMLModel:
         """
         print(f"Training model for {asset_name}...")
         
+        # Feature selection on first asset
+        if self.feature_selector is None and X_train.shape[1] > 30:
+            self.feature_selector = SelectKBest(f_regression, k=min(30, X_train.shape[1]))
+            self.feature_selector.fit(X_train, y_train)
+        
+        # Apply feature selection
+        if self.feature_selector is not None:
+            X_selected = self.feature_selector.transform(X_train)
+            X_train_use = pd.DataFrame(X_selected, index=X_train.index)
+        else:
+            X_train_use = X_train
+        
         # Create and train model
-        model = DecisionTreeRegressor(**self.model_params)
-        model.fit(X_train, y_train)
+        model = RandomForestRegressor(**self.model_params)
+        model.fit(X_train_use, y_train)
         
         # Store model
         self.models[asset_name] = model
         
         # Store feature importance
-        self.feature_importance[asset_name] = pd.Series(
-            model.feature_importances_,
-            index=X_train.columns
-        ).sort_values(ascending=False)
+        if hasattr(model, 'feature_importances_'):
+            if self.feature_selector is not None:
+                selected_features = X_train.columns[self.feature_selector.get_support()]
+                self.feature_importance[asset_name] = pd.Series(
+                    model.feature_importances_,
+                    index=selected_features
+                ).sort_values(ascending=False)
+            else:
+                self.feature_importance[asset_name] = pd.Series(
+                    model.feature_importances_,
+                    index=X_train.columns
+                ).sort_values(ascending=False)
         
         # Training metrics
-        train_pred = model.predict(X_train)
+        train_pred = model.predict(X_train_use)
         train_mse = mean_squared_error(y_train, train_pred)
         train_r2 = r2_score(y_train, train_pred)
         
@@ -135,7 +164,7 @@ class PortfolioMLModel:
     
     def train_all_models(self,
                         X_train: pd.DataFrame,
-                        y_train: pd.DataFrame) -> Dict[str, DecisionTreeRegressor]:
+                        y_train: pd.DataFrame) -> Dict[str, RandomForestRegressor]:
         """
         Train models for all assets.
         
@@ -248,7 +277,14 @@ class PortfolioMLModel:
         predictions = {}
         
         for asset_name, model in self.models.items():
-            predictions[asset_name] = model.predict(X)
+            # Apply feature selection if used
+            if self.feature_selector is not None:
+                X_selected = self.feature_selector.transform(X)
+                X_use = pd.DataFrame(X_selected, index=X.index)
+            else:
+                X_use = X
+            
+            predictions[asset_name] = model.predict(X_use)
         
         predictions_df = pd.DataFrame(predictions, index=X.index)
         
@@ -256,15 +292,15 @@ class PortfolioMLModel:
     
     def calculate_optimal_allocations(self,
                                      predicted_returns: pd.DataFrame,
-                                     risk_aversion: float = 1.0) -> pd.DataFrame:
+                                     historical_returns: pd.DataFrame = None,
+                                     use_risk_parity: bool = True) -> pd.DataFrame:
         """
-        Calculate optimal portfolio allocations based on predicted returns.
-        
-        Uses a simple mean-variance optimization approach.
+        Calculate optimal portfolio allocations with risk parity.
         
         Args:
             predicted_returns: DataFrame with predicted returns
-            risk_aversion: Risk aversion parameter (higher = more conservative)
+            historical_returns: Historical returns for volatility calculation
+            use_risk_parity: Whether to use risk parity weighting
             
         Returns:
             DataFrame with optimal allocations
@@ -272,22 +308,36 @@ class PortfolioMLModel:
         allocations = pd.DataFrame(index=predicted_returns.index, 
                                   columns=predicted_returns.columns)
         
+        # Calculate volatility if using risk parity
+        if use_risk_parity and historical_returns is not None:
+            vol_lookback = self.config.get('risk', {}).get('volatility_lookback', 12)
+            volatility = historical_returns.rolling(vol_lookback).std().fillna(historical_returns.std())
+        
         for idx in predicted_returns.index:
             returns = predicted_returns.loc[idx]
             
-            # Simple allocation based on predicted returns
-            # Positive returns get higher allocations
-            positive_returns = returns.clip(lower=0)
-            
-            if positive_returns.sum() > 0:
-                weights = positive_returns / positive_returns.sum()
+            if use_risk_parity and historical_returns is not None:
+                # Risk parity: weight inversely to volatility, scaled by return signal
+                vol = volatility.loc[idx] if idx in volatility.index else historical_returns.std()
+                risk_contribution = 1 / (vol + 1e-6)
+                
+                # Apply return signal direction
+                weights = risk_contribution * np.sign(returns) * np.abs(returns)
+                
+                # Handle all negative case
+                if weights.sum() <= 0:
+                    weights = risk_contribution / risk_contribution.sum()
+                else:
+                    weights = weights.clip(lower=0)
+                    weights = weights / weights.sum()
             else:
-                # If all negative, use equal weights
-                weights = pd.Series(1.0 / len(returns), index=returns.index)
+                # Fallback to softmax
+                scaled_returns = returns * 0.2
+                exp_returns = np.exp(scaled_returns - scaled_returns.max())
+                weights = exp_returns / exp_returns.sum()
             
-            # Apply constraints from config
+            # Apply constraints
             weights = self.apply_allocation_constraints(weights)
-            
             allocations.loc[idx] = weights
         
         return allocations
@@ -335,7 +385,7 @@ class PortfolioMLModel:
         cv_scores = {}
         
         for asset in y.columns:
-            model = DecisionTreeRegressor(**self.model_params)
+            model = RandomForestRegressor(**self.model_params)
             scores = cross_val_score(
                 model, X, y[asset], 
                 cv=tscv, 
