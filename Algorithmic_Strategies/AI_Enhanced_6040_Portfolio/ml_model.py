@@ -14,6 +14,7 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
 import pickle
 import os
+from scipy import stats
 
 # Conditional imports for optional dependencies
 try:
