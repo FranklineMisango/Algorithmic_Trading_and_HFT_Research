@@ -26,7 +26,7 @@ class FeatureEngineer:
         
     def create_lagged_features(self, 
                                indicators: pd.DataFrame, 
-                               lags: List[int] = [1, 3, 6]) -> pd.DataFrame:
+                               lags: List[int] = [1, 3]) -> pd.DataFrame:
         """
         Create lagged features from indicators.
         
@@ -47,7 +47,7 @@ class FeatureEngineer:
     
     def create_rolling_features(self, 
                                 indicators: pd.DataFrame,
-                                windows: List[int] = [3, 6, 12]) -> pd.DataFrame:
+                                windows: List[int] = [3, 6]) -> pd.DataFrame:
         """
         Create rolling statistics features.
         
@@ -94,12 +94,10 @@ class FeatureEngineer:
             # Absolute change
             change_features[f'{col}_change_1m'] = indicators[col].diff(1)
             change_features[f'{col}_change_3m'] = indicators[col].diff(3)
-            change_features[f'{col}_change_6m'] = indicators[col].diff(6)
             
             # Percentage change
             change_features[f'{col}_pct_change_1m'] = indicators[col].pct_change(1)
             change_features[f'{col}_pct_change_3m'] = indicators[col].pct_change(3)
-            change_features[f'{col}_pct_change_6m'] = indicators[col].pct_change(6)
         
         return change_features
     
@@ -134,6 +132,69 @@ class FeatureEngineer:
         
         return interaction_features
     
+    def create_momentum_features(self, prices: pd.DataFrame) -> pd.DataFrame:
+        """
+        Create momentum indicators (RSI, MACD proxies) from price data.
+        
+        Args:
+            prices: DataFrame with asset prices
+            
+        Returns:
+            DataFrame with momentum features
+        """
+        momentum_features = pd.DataFrame(index=prices.index)
+        
+        for col in prices.columns:
+            # RSI proxy: ratio of up moves to down moves
+            delta = prices[col].diff()
+            gain = delta.where(delta > 0, 0).rolling(14).mean()
+            loss = -delta.where(delta < 0, 0).rolling(14).mean()
+            rs = gain / (loss + 1e-6)
+            rsi = 100 - (100 / (1 + rs))
+            momentum_features[f'{col}_RSI'] = rsi
+            
+            # MACD proxy: difference between fast and slow moving averages
+            ema_fast = prices[col].ewm(span=12).mean()
+            ema_slow = prices[col].ewm(span=26).mean()
+            macd = ema_fast - ema_slow
+            momentum_features[f'{col}_MACD'] = macd
+            
+            # Rate of change
+            momentum_features[f'{col}_ROC_10'] = prices[col].pct_change(10)
+        
+        return momentum_features
+    
+    def create_cross_asset_features(self, returns: pd.DataFrame) -> pd.DataFrame:
+        """
+        Create cross-asset correlation and relative strength features.
+        
+        Args:
+            returns: DataFrame with asset returns
+            
+        Returns:
+            DataFrame with cross-asset features
+        """
+        cross_features = pd.DataFrame(index=returns.index)
+        
+        # Rolling correlations between key assets
+        if 'SPY' in returns.columns and 'TLT' in returns.columns:
+            corr = returns['SPY'].rolling(6).corr(returns['TLT'])
+            cross_features['SPY_TLT_Corr'] = corr
+        
+        if 'SPY' in returns.columns and 'GLD' in returns.columns:
+            corr = returns['SPY'].rolling(6).corr(returns['GLD'])
+            cross_features['SPY_GLD_Corr'] = corr
+        
+        # Relative strength: asset vs market
+        if 'SPY' in returns.columns:
+            for col in returns.columns:
+                if col != 'SPY':
+                    rel_strength = (returns[col].rolling(6).mean() / 
+                                  (returns['SPY'].rolling(6).mean() + 1e-6))
+                    cross_features[f'{col}_vs_SPY'] = rel_strength
+        
+        return cross_features
+    
     def create_regime_features(self, indicators: pd.DataFrame) -> pd.DataFrame:
         """
         Create regime-based features (high/low volatility, inverted yield curve, etc.).
@@ -163,25 +224,38 @@ class FeatureEngineer:
             rate_median = indicators['Interest_Rate'].median()
             regime_features['high_rate'] = (indicators['Interest_Rate'] > rate_median).astype(int)
         
+        # Momentum features
+        for col in indicators.columns:
+            momentum_features = indicators[col].pct_change(3)
+            regime_features[f'{col}_momentum_3m'] = momentum_features
+        
         return regime_features
     
     def engineer_all_features(self, 
                               indicators: pd.DataFrame,
+                              prices: pd.DataFrame = None,
+                              returns: pd.DataFrame = None,
                               include_lagged: bool = True,
                               include_rolling: bool = True,
                               include_changes: bool = True,
                               include_interactions: bool = True,
-                              include_regimes: bool = True) -> pd.DataFrame:
+                              include_regimes: bool = True,
+                              include_momentum: bool = True,
+                              include_cross_asset: bool = True) -> pd.DataFrame:
         """
         Create all engineered features.
         
         Args:
             indicators: DataFrame with economic indicators
+            prices: DataFrame with asset prices (for momentum features)
+            returns: DataFrame with asset returns (for cross-asset features)
             include_lagged: Whether to include lagged features
             include_rolling: Whether to include rolling features
             include_changes: Whether to include change features
             include_interactions: Whether to include interaction features
             include_regimes: Whether to include regime features
+            include_momentum: Whether to include momentum features
+            include_cross_asset: Whether to include cross-asset features
             
         Returns:
             DataFrame with all engineered features
@@ -208,6 +282,14 @@ class FeatureEngineer:
             regime_feats = self.create_regime_features(indicators)
             feature_list.append(regime_feats)
         
+        if include_momentum and prices is not None:
+            momentum_feats = self.create_momentum_features(prices)
+            feature_list.append(momentum_feats)
+        
+        if include_cross_asset and returns is not None:
+            cross_feats = self.create_cross_asset_features(returns)
+            feature_list.append(cross_feats)
+        
         # Concatenate all features
         features = pd.concat(feature_list, axis=1)
         
@@ -218,26 +300,30 @@ class FeatureEngineer:
     
     def prepare_features_for_training(self, 
                                      features: pd.DataFrame,
-                                     dropna: bool = True) -> pd.DataFrame:
+                                     dropna: bool = False) -> pd.DataFrame:  # Changed default to False
         """
         Prepare features for model training.
         
         Args:
             features: DataFrame with engineered features
-            dropna: Whether to drop rows with NaN values
+            dropna: Whether to drop rows with NaN values (now defaults to False)
             
         Returns:
             DataFrame ready for training
         """
         prepared = features.copy()
         
+        # Replace inf values first
+        prepared = prepared.replace([np.inf, -np.inf], np.nan)
+        
+        # Fill NaN values using forward fill, then backward fill for any remaining NaNs
+        prepared = prepared.fillna(method='ffill').fillna(method='bfill').fillna(0)
+        
         if dropna:
-            # Drop rows with NaN (created by lagging/rolling)
+            # Drop rows with NaN (created by lagging/rolling) - only if explicitly requested
             prepared = prepared.dropna()
         
-        # Replace inf values
-        prepared = prepared.replace([np.inf, -np.inf], np.nan)
-        prepared = prepared.fillna(0)
+        return prepared
         
         return prepared
     

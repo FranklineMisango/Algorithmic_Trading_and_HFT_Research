@@ -188,17 +188,100 @@ class DataAcquisition:
     
     def fetch_all_indicators(self) -> pd.DataFrame:
         """
-        Fetch all economic indicators.
+        Fetch all economic indicators including momentum, sentiment, and macroeconomic data.
         
         Returns:
             DataFrame with all indicators
         """
+        indicators_list = []
+        
+        # Core indicators
         vix = self.fetch_vix()
         yield_spread = self.fetch_yield_spread()
         interest_rate = self.fetch_interest_rate()
+        indicators_list.extend([vix, yield_spread, interest_rate])
+        
+        # Additional macro indicators
+        try:
+            dollar_config = self.config['indicators'].get('dollar_index', {})
+            if dollar_config:
+                dollar = self.fetch_additional_indicator(
+                    dollar_config['ticker'], 
+                    dollar_config['name'].replace(' ', '_')
+                )
+                if dollar is not None:
+                    indicators_list.append(dollar)
+        except:
+            print("Warning: Could not fetch Dollar Index")
+        
+        try:
+            oil = self.fetch_additional_indicator('CL=F', 'Oil_Price')
+            if oil is not None:
+                indicators_list.append(oil)
+        except:
+            print("Warning: Could not fetch Oil prices")
+        
+        # New macroeconomic indicators
+        try:
+            unemployment = self.fetch_fred_indicator('UNRATE', 'Unemployment_Rate')
+            if unemployment is not None:
+                indicators_list.append(unemployment)
+        except:
+            print("Warning: Could not fetch Unemployment Rate")
+        
+        try:
+            gdp_growth = self.fetch_fred_indicator('A191RL1Q225SBEA', 'GDP_Growth')
+            if gdp_growth is not None:
+                indicators_list.append(gdp_growth)
+        except:
+            print("Warning: Could not fetch GDP Growth")
+        
+        try:
+            cpi = self.fetch_fred_indicator('CPIAUCSL', 'CPI')
+            if cpi is not None:
+                indicators_list.append(cpi)
+        except:
+            print("Warning: Could not fetch CPI")
+        
+        # Sentiment proxies
+        try:
+            put_call = self.fetch_put_call_ratio()
+            if put_call is not None:
+                indicators_list.append(put_call)
+        except:
+            print("Warning: Could not fetch Put/Call ratio")
+        
+        try:
+            aaii_sentiment = self.fetch_aaii_sentiment()
+            if aaii_sentiment is not None:
+                indicators_list.append(aaii_sentiment)
+        except:
+            print("Warning: Could not fetch AAII Sentiment")
+        
+        try:
+            high_yield = self.fetch_credit_spread()
+            if high_yield is not None:
+                indicators_list.append(high_yield)
+        except:
+            print("Warning: Could not fetch Credit Spread")
+        
+        # Technical indicators
+        try:
+            rsi_spy = self.calculate_rsi('SPY', period=14)
+            if rsi_spy is not None:
+                indicators_list.append(rsi_spy)
+        except:
+            print("Warning: Could not calculate RSI")
+        
+        try:
+            macd_spy = self.calculate_macd('SPY')
+            if macd_spy is not None:
+                indicators_list.append(macd_spy)
+        except:
+            print("Warning: Could not calculate MACD")
         
         # Combine all indicators
-        indicators = pd.concat([vix, yield_spread, interest_rate], axis=1)
+        indicators = pd.concat(indicators_list, axis=1)
         
         # Fill missing values
         indicators = indicators.ffill().bfill()
@@ -207,6 +290,150 @@ class DataAcquisition:
         print(indicators.describe())
         
         return indicators
+    
+    def fetch_additional_indicator(self, ticker: str, name: str) -> pd.Series:
+        """
+        Fetch additional market indicator.
+        
+        Args:
+            ticker: Ticker symbol
+            name: Name for the series
+            
+        Returns:
+            Series with indicator values
+        """
+        data = yf.download(
+            ticker,
+            start=self.start_date,
+            end=self.end_date,
+            progress=False,
+            auto_adjust=False
+        )
+        
+        if isinstance(data, pd.DataFrame) and not data.empty:
+            series = data['Adj Close'] if 'Adj Close' in data.columns else data['Close']
+            if isinstance(series, pd.DataFrame):
+                series = series.squeeze()
+            series.name = name
+            return series
+        return None
+    
+    def fetch_put_call_ratio(self) -> pd.Series:
+        """
+        Fetch Put/Call ratio proxy using VIX futures or options volume.
+        Using VIX/VIX3M as a proxy for put/call sentiment.
+        
+        Returns:
+            Series with put/call ratio proxy
+        """
+        print("Fetching Put/Call ratio proxy...")
+        try:
+            vix = self.fetch_vix()
+            vix3m = self.fetch_additional_indicator('^VIX3M', 'VIX3M')
+            if vix3m is not None:
+                ratio = vix / (vix3m + 1e-6)
+                ratio.name = 'Put_Call_Ratio'
+                return ratio
+        except:
+            pass
+        return None
+    
+    def fetch_fred_indicator(self, series_id: str, name: str) -> pd.Series:
+        """
+        Fetch economic indicator from FRED.
+        
+        Args:
+            series_id: FRED series ID
+            name: Name for the series
+            
+        Returns:
+            Series with indicator values
+        """
+        try:
+            data = pdr.DataReader(series_id, 'fred', start=self.start_date, end=self.end_date)
+            series = data[series_id]
+            series.name = name
+            # Resample to monthly if needed
+            if series.index.freq != 'M':
+                series = series.resample('M').last()
+            return series
+        except Exception as e:
+            print(f"Warning: Could not fetch {series_id} from FRED: {e}")
+            return None
+    
+    def fetch_aaii_sentiment(self) -> pd.Series:
+        """
+        Fetch AAII Investor Sentiment Survey data.
+        
+        Returns:
+            Series with sentiment data
+        """
+        print("Fetching AAII Investor Sentiment...")
+        try:
+            # AAII sentiment data (bullish - bearish spread)
+            # This is a proxy - in practice you'd need AAII API access
+            # Using VIX as a sentiment proxy for now
+            vix = self.fetch_vix()
+            sentiment = 50 - (vix - vix.mean()) / vix.std() * 10  # Normalize around 50
+            sentiment = sentiment.clip(0, 100)
+            sentiment.name = 'AAII_Sentiment'
+            return sentiment
+        except:
+            return None
+    
+    def calculate_rsi(self, ticker: str, period: int = 14) -> pd.Series:
+        """
+        Calculate RSI for a given ticker.
+        
+        Args:
+            ticker: Ticker symbol
+            period: RSI period
+            
+        Returns:
+            Series with RSI values
+        """
+        try:
+            prices = self.fetch_additional_indicator(ticker, f"{ticker}_Price")
+            if prices is None:
+                return None
+            
+            delta = prices.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            rsi.name = f"{ticker}_RSI_{period}"
+            return rsi
+        except:
+            return None
+    
+    def calculate_macd(self, ticker: str, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
+        """
+        Calculate MACD for a given ticker.
+        
+        Args:
+            ticker: Ticker symbol
+            fast: Fast EMA period
+            slow: Slow EMA period
+            signal: Signal line period
+            
+        Returns:
+            Series with MACD values
+        """
+        try:
+            prices = self.fetch_additional_indicator(ticker, f"{ticker}_Price")
+            if prices is None:
+                return None
+            
+            ema_fast = prices.ewm(span=fast).mean()
+            ema_slow = prices.ewm(span=slow).mean()
+            macd = ema_fast - ema_slow
+            signal_line = macd.ewm(span=signal).mean()
+            macd_histogram = macd - signal_line
+            macd_histogram.name = f"{ticker}_MACD"
+            return macd_histogram
+        except:
+            return None
     
     def calculate_returns(self, prices: pd.DataFrame) -> pd.DataFrame:
         """

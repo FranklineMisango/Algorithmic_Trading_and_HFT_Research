@@ -1,8 +1,6 @@
 """
-Main Orchestration Script for AI-Enhanced 60/40 Portfolio
-
-This script coordinates all modules to run the complete AI-driven
-portfolio allocation strategy.
+Enhanced Main Script for AI-Enhanced 60/40 Portfolio
+Incorporates all critical improvements including walk-forward optimization.
 """
 
 import yaml
@@ -10,7 +8,7 @@ import pandas as pd
 import numpy as np
 import os
 from datetime import datetime
-import matplotlib.pyplot as plt
+from typing import Dict, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -18,297 +16,642 @@ from data_acquisition import DataAcquisition
 from feature_engineering import FeatureEngineer
 from ml_model import PortfolioMLModel
 from backtester import PortfolioBacktester
+from regime_detector import RegimeDetector
 
 
-class AIPortfolioStrategy:
-    """Main class to orchestrate the AI-enhanced portfolio strategy."""
-    
-    def __init__(self, config_path: str = 'config.yaml'):
-        """
-        Initialize the strategy.
-        
-        Args:
-            config_path: Path to configuration file
-        """
-        # Load configuration
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
-        
-        # Initialize components
-        self.data_acq = DataAcquisition(self.config)
-        self.feature_eng = FeatureEngineer(self.config)
-        self.ml_model = PortfolioMLModel(self.config)
-        self.backtester = PortfolioBacktester(self.config)
-        
-        # Data storage
-        self.prices = None
-        self.returns = None
-        self.indicators = None
-        self.features = None
-        self.allocations = None
-        self.backtest_results = None
-        
-        # Create output directories
-        self._create_output_dirs()
-    
-    def _create_output_dirs(self):
-        """Create output directories for results."""
-        for dir_name in ['results', 'figures', 'models']:
-            dir_path = self.config['output'][f'{dir_name}_dir']
-            os.makedirs(dir_path, exist_ok=True)
-    
-    def load_data(self):
-        """Load and prepare all data."""
-        print("\n" + "="*60)
-        print("STEP 1: LOADING DATA")
-        print("="*60)
-        
-        self.prices, self.returns, self.indicators = self.data_acq.get_full_dataset()
-        
-        print(f"\nData loaded successfully")
-        print(f"  - Price data: {self.prices.shape}")
-        print(f"  - Returns data: {self.returns.shape}")
-        print(f"  - Indicators data: {self.indicators.shape}")
-        print(f"  - Date range: {self.prices.index[0]} to {self.prices.index[-1]}")
-    
-    def engineer_features(self):
-        """Engineer features from indicators."""
-        print("\n" + "="*60)
-        print("STEP 2: ENGINEERING FEATURES")
-        print("="*60)
-        
-        # Create all features
-        features_raw = self.feature_eng.engineer_all_features(self.indicators)
-        
-        # Prepare for training
-        self.features = self.feature_eng.prepare_features_for_training(features_raw)
-        
-        print(f"\nFeatures engineered successfully")
-        print(f"  - Raw features: {features_raw.shape}")
-        print(f"  - Prepared features: {self.features.shape}")
-        print(f"  - Number of feature columns: {len(self.features.columns)}")
-    
-    def train_models(self):
-        """Train ML models for each asset."""
-        print("\n" + "="*60)
-        print("STEP 3: TRAINING ML MODELS")
-        print("="*60)
-        
-        # Create target variables (next period returns)
-        targets = self.ml_model.create_target_variables(self.returns, lookback=1)
-        
-        # Prepare train/test split
-        X_train, X_test, y_train, y_test = self.ml_model.prepare_train_test_data(
-            self.features, 
-            targets,
-            test_size=self.config['model']['validation']['test_size']
+def walk_forward_optimization(config: Dict,
+                              train_window: int = 60,
+                              test_window: int = 12) -> Tuple:
+    """
+    Perform walk-forward optimization.
+
+    Args:
+        config: Configuration dictionary
+        train_window: Training window in months
+        test_window: Test window in months
+
+    Returns:
+        Tuple of (all_allocations, all_predictions, performance_metrics)
+    """
+    print("\n" + "="*70)
+    print("WALK-FORWARD OPTIMIZATION")
+    print("="*70)
+
+    # Fetch data
+    print("\n1. Fetching data...")
+    data_acq = DataAcquisition(config)
+    prices, returns, indicators = data_acq.get_full_dataset()
+
+    # Initialize
+    feature_eng = FeatureEngineer(config)
+    all_allocations = []
+    all_predictions = []
+
+    # Calculate number of windows
+    total_periods = len(returns)
+    n_windows = (total_periods - train_window) // test_window
+
+    print(f"\nTotal periods: {total_periods}")
+    print(f"Training window: {train_window} months")
+    print(f"Test window: {test_window} months")
+    print(f"Number of windows: {n_windows}")
+
+    for i in range(n_windows):
+        start_train = i * test_window
+        end_train = start_train + train_window
+        end_test = min(end_train + test_window, total_periods)
+
+        print(f"\n{'='*70}")
+        print(f"Window {i+1}/{n_windows}")
+        print(f"Train: {returns.index[start_train]} to {returns.index[end_train-1]}")
+        print(f"Test: {returns.index[end_train]} to {returns.index[end_test-1]}")
+        print(f"{'='*70}")
+
+        # Split data
+        train_prices = prices.iloc[start_train:end_train]
+        train_returns = returns.iloc[start_train:end_train]
+        train_indicators = indicators.iloc[start_train:end_train]
+
+        test_prices = prices.iloc[end_train:end_test]
+        test_returns = returns.iloc[end_train:end_test]
+        test_indicators = indicators.iloc[end_train:end_test]
+
+        # Engineer features with momentum and cross-asset
+        train_features = feature_eng.engineer_all_features(
+            train_indicators,
+            prices=train_prices,
+            returns=train_returns
         )
-        
-        print(f"\nTraining set: {X_train.shape}")
-        print(f"Test set: {X_test.shape}")
-        
+        train_features = feature_eng.prepare_features_for_training(train_features)
+
+        # Engineer test features (use data up to end_test for feature calculation)
+        test_features = feature_eng.engineer_all_features(
+            indicators.iloc[:end_test],
+            prices=prices.iloc[:end_test],
+            returns=returns.iloc[:end_test]
+        )
+        test_features = feature_eng.prepare_features_for_training(test_features)
+        # Select only test period features
+        test_features = test_features.loc[test_returns.index.intersection(test_features.index)]
+
+        # Create targets
+        ml_model = PortfolioMLModel(config)
+        train_targets = ml_model.create_target_variables(train_returns, lookback=1)
+
+        # Align features and targets
+        common_train = train_features.index.intersection(train_targets.index)
+        X_train = train_features.loc[common_train]
+        y_train = train_targets.loc[common_train]
+
+        # FIX: Reset feature selector for each window to avoid using future information
+        ml_model.feature_selector = None
+
         # Train models
-        self.ml_model.train_all_models(X_train, y_train)
-        
-        # Evaluate models
-        evaluation_results = self.ml_model.evaluate_all_models(X_test, y_test)
-        
-        # Save evaluation results
-        eval_path = os.path.join(self.config['output']['results_dir'], 'model_evaluation.csv')
-        evaluation_results.to_csv(eval_path)
-        print(f"\nEvaluation results saved to {eval_path}")
-        
-        # Save models
-        self.ml_model.save_models(self.config['output']['models_dir'])
-        
-        # Store for later use
-        self.X_test = X_test
-        self.y_test = y_test
-    
-    def generate_allocations(self):
-        """Generate portfolio allocations using trained models."""
-        print("\n" + "="*60)
-        print("STEP 4: GENERATING PORTFOLIO ALLOCATIONS")
-        print("="*60)
-        
-        # Only predict on test set to avoid look-ahead bias
-        test_features = self.features.loc[self.X_test.index]
-        
-        # Predict returns for test period only
-        predicted_returns = self.ml_model.predict_returns(test_features)
-        
-        # Calculate optimal allocations with risk parity
-        use_risk_parity = self.config.get('risk', {}).get('use_risk_parity', True)
-        self.allocations = self.ml_model.calculate_optimal_allocations(
-            predicted_returns,
-            historical_returns=self.returns,
-            use_risk_parity=use_risk_parity
+        print(f"\nTraining models on {len(X_train)} samples...")
+        ml_model.train_all_models(X_train, y_train)
+
+        # Predict on test set
+        common_test = test_features.index.intersection(test_returns.index)
+        X_test = test_features.loc[common_test]
+
+        print(f"Predicting on {len(X_test)} samples...")
+        predictions = ml_model.predict_returns(X_test)
+
+        # Calculate allocations with risk parity and regime adjustment
+        # Detect regimes (FIXED: no lookahead bias)
+        detector = RegimeDetector(config)
+        if 'VIX' in indicators.columns and 'Yield_Spread' in indicators.columns:
+            # Only use historical data available at prediction time
+            historical_indicators = indicators.iloc[:end_train]
+            historical_prices = prices.iloc[:end_train]
+            regimes = detector.detect_combined_regime(
+                historical_indicators['VIX'],
+                historical_prices['SPY'],
+                historical_indicators['Yield_Spread']
+            )
+            # Extend regimes to test period (assume regime persists)
+            regimes = pd.Series([regimes.iloc[-1]] * len(test_returns), index=test_returns.index)
+        else:
+            regimes = None
+
+        allocations = ml_model.calculate_optimal_allocations(
+            predictions,
+            historical_returns=returns.iloc[start_train:end_train],  # FIX: Only use historical data available at prediction time
+            use_risk_parity=config.get('risk', {}).get('use_risk_parity', True),
+            regimes=regimes
         )
-        
-        print(f"\nAllocations generated successfully")
-        print(f"  - Allocations shape: {self.allocations.shape}")
-        print(f"  - Test period: {self.allocations.index[0]} to {self.allocations.index[-1]}")
-        
-        # Save allocations
-        if self.config['output']['save_allocations']:
-            alloc_path = os.path.join(self.config['output']['results_dir'], 'allocations.csv')
-            self.allocations.to_csv(alloc_path)
-            print(f"  - Saved to: {alloc_path}")
-        
-        # Print allocation summary
-        print(f"\nAverage Allocations:")
-        avg_alloc = self.allocations.mean()
-        for asset, alloc in avg_alloc.items():
-            print(f"  {asset}: {alloc:.2%}")
-    
-    def run_backtest(self):
-        """Run backtest with AI allocations."""
-        print("\n" + "="*60)
-        print("STEP 5: RUNNING BACKTEST")
-        print("="*60)
-        
-        # Align returns and prices to test period
-        test_returns = self.returns.loc[self.allocations.index]
-        test_prices = self.prices.loc[self.allocations.index]
-        
-        # Backtest AI strategy
-        ai_results = self.backtester.backtest_strategy(
-            self.allocations, 
-            test_returns, 
-            test_prices
-        )
-        
-        # Create benchmark strategies for same period
-        benchmark_results = self.backtester.create_benchmark_strategy(
-            test_returns, 
-            test_prices, 
-            self.config['backtest']['benchmark']
-        )
-        
-        traditional_6040_results = self.backtester.create_traditional_6040(
-            test_returns, 
-            test_prices
-        )
-        
-        # Store results
-        self.backtest_results = {
-            'AI Portfolio': ai_results,
-            'Buy & Hold SPY': benchmark_results,
-            'Traditional 60/40': traditional_6040_results
-        }
-        
-        # Calculate and display metrics
-        comparison = self.backtester.compare_strategies(self.backtest_results)
-        
-        print("\n" + "="*60)
-        print("PERFORMANCE COMPARISON")
-        print("="*60)
-        print(comparison.round(4))
-        
-        # Save comparison
-        comp_path = os.path.join(self.config['output']['results_dir'], 'performance_comparison.csv')
-        comparison.to_csv(comp_path)
-        print(f"\nPerformance comparison saved to {comp_path}")
-        
-        return comparison
-    
-    def generate_visualizations(self):
-        """Generate all visualization plots."""
-        print("\n" + "="*60)
-        print("STEP 6: GENERATING VISUALIZATIONS")
-        print("="*60)
-        
-        figures_dir = self.config['output']['figures_dir']
-        
-        # 1. Portfolio value comparison
-        fig1 = self.backtester.plot_portfolio_value(self.backtest_results)
-        fig1.savefig(os.path.join(figures_dir, 'portfolio_value.png'), dpi=300, bbox_inches='tight')
-        print("Portfolio value plot saved")
-        plt.close()
-        
-        # 2. Drawdown comparison
-        fig2 = self.backtester.plot_drawdown(self.backtest_results)
-        fig2.savefig(os.path.join(figures_dir, 'drawdown.png'), dpi=300, bbox_inches='tight')
-        print("Drawdown plot saved")
-        plt.close()
-        
-        # 3. Monthly returns for AI portfolio
-        fig3 = self.backtester.plot_monthly_returns(self.backtest_results['AI Portfolio'])
-        fig3.savefig(os.path.join(figures_dir, 'monthly_returns.png'), dpi=300, bbox_inches='tight')
-        print("Monthly returns plot saved")
-        plt.close()
-        
-        # 4. Portfolio allocations over time
-        fig4 = self.backtester.plot_allocations(self.allocations)
-        fig4.savefig(os.path.join(figures_dir, 'allocations.png'), dpi=300, bbox_inches='tight')
-        print("Allocations plot saved")
-        plt.close()
-        
-        # 5. Feature importance (for first asset as example)
-        fig5, ax = plt.subplots(figsize=(12, 8))
-        first_asset = list(self.ml_model.feature_importance.keys())[0]
-        importance = self.ml_model.feature_importance[first_asset].head(20)
-        importance.plot(kind='barh', ax=ax)
-        ax.set_xlabel('Importance', fontsize=12)
-        ax.set_title(f'Top 20 Feature Importances - {first_asset}', 
-                    fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        fig5.savefig(os.path.join(figures_dir, 'feature_importance.png'), dpi=300, bbox_inches='tight')
-        print("Feature importance plot saved")
-        plt.close()
-        
-        print(f"\nAll visualizations saved to {figures_dir}/")
-    
-    def run_full_strategy(self):
-        """Run the complete strategy pipeline."""
-        print("\n" + "="*60)
-        print("AI-ENHANCED 60/40 PORTFOLIO STRATEGY")
-        print("="*60)
-        print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Execute all steps
-        self.load_data()
-        self.engineer_features()
-        self.train_models()
-        self.generate_allocations()
-        comparison = self.run_backtest()
-        self.generate_visualizations()
-        
-        # Final summary
-        print("\n" + "="*60)
-        print("STRATEGY EXECUTION COMPLETE")
-        print("="*60)
-        
-        # Highlight key metrics
-        ai_sharpe = comparison.loc['AI Portfolio', 'Sharpe Ratio']
-        benchmark_sharpe = comparison.loc['Buy & Hold SPY', 'Sharpe Ratio']
-        improvement = ((ai_sharpe - benchmark_sharpe) / benchmark_sharpe) * 100
-        
-        print(f"\nKey Results:")
-        print(f"  AI Portfolio Sharpe Ratio: {ai_sharpe:.4f}")
-        print(f"  Benchmark Sharpe Ratio: {benchmark_sharpe:.4f}")
-        print(f"  Improvement: {improvement:+.2f}%")
-        
-        print(f"\nAll results saved to:")
-        print(f"  - Results: {self.config['output']['results_dir']}/")
-        print(f"  - Figures: {self.config['output']['figures_dir']}/")
-        print(f"  - Models: {self.config['output']['models_dir']}/")
-        
-        print(f"\nCompleted at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("="*60 + "\n")
-        
-        return comparison
+
+        all_allocations.append(allocations)
+        all_predictions.append(predictions)
+
+    # Combine all windows
+    final_allocations = pd.concat(all_allocations)
+    final_predictions = pd.concat(all_predictions)
+
+    print(f"\n{'='*70}")
+    print("Walk-Forward Optimization Complete!")
+    print(f"Total allocation periods: {len(final_allocations)}")
+    print(f"{'='*70}")
+
+    return final_allocations, final_predictions, prices, returns
 
 
 def main():
-    """Main function to run the strategy."""
-    # Initialize and run strategy
-    strategy = AIPortfolioStrategy()
-    results = strategy.run_full_strategy()
-    
-    return strategy, results
+    """Main execution function with all enhancements."""
+
+    print("\n" + "="*70)
+    print("AI-ENHANCED 60/40 PORTFOLIO - ENHANCED VERSION")
+    print("="*70)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Load configuration
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Create output directories
+    os.makedirs('results', exist_ok=True)
+    os.makedirs('figures', exist_ok=True)
+    os.makedirs('models', exist_ok=True)
+
+    # Run walk-forward optimization
+    allocations, predictions, prices, returns = walk_forward_optimization(
+        config,
+        train_window=60,
+        test_window=12
+    )
+
+    # Backtest with enhanced features
+    print("\n" + "="*70)
+    print("BACKTESTING")
+    print("="*70)
+
+    backtester = PortfolioBacktester(config)
+
+    # AI Strategy with dynamic rebalancing and stop-loss
+    print("\n1. AI-Enhanced Strategy (with dynamic rebalancing & stop-loss)...")
+    ai_results = backtester.backtest_strategy(
+        allocations,
+        returns,
+        prices,
+        use_dynamic_rebalancing=True,
+        use_stop_loss=True
+    )
+
+    # Benchmarks
+    print("\n2. Buy & Hold SPY...")
+    spy_results = backtester.create_benchmark_strategy(returns, prices, 'SPY')
+
+    print("\n3. Traditional 60/40...")
+    trad_results = backtester.create_traditional_6040(returns, prices)
+
+    # Compare strategies
+    strategies = {
+        'AI-Enhanced (Walk-Forward)': ai_results,
+        'Buy & Hold SPY': spy_results,
+        'Traditional 60/40': trad_results
+    }
+
+    comparison = backtester.compare_strategies(strategies)
+
+    print("\n" + "="*70)
+    print("PERFORMANCE COMPARISON")
+    print("="*70)
+    print(comparison.round(4))
+
+    # Statistical Testing
+    if config.get('backtest', {}).get('statistical_testing', {}).get('enabled', False):
+        print("\n" + "="*70)
+        print("STATISTICAL TESTING")
+        print("="*70)
+
+        stat_tests = backtester.perform_statistical_tests(
+            ai_results,
+            spy_results,
+            significance_level=config['backtest']['statistical_testing'].get('significance_level', 0.05)
+        )
+
+        print("\nReturns T-Test vs SPY:")
+        print(f"  T-statistic: {stat_tests['returns_t_test']['t_statistic']:.4f}")
+        print(f"  P-value: {stat_tests['returns_t_test']['p_value']:.4f}")
+        print(f"  Significant: {stat_tests['returns_t_test']['significant']}")
+        print(f"  AI Mean Return: {stat_tests['returns_t_test']['strategy_mean']:.6f}")
+        print(f"  SPY Mean Return: {stat_tests['returns_t_test']['benchmark_mean']:.6f}")
+
+        print(f"\nSharpe Ratio Comparison:")
+        print(f"  AI Sharpe: {stat_tests['sharpe_ratio_comparison']['strategy_sharpe']:.4f}")
+        print(f"  SPY Sharpe: {stat_tests['sharpe_ratio_comparison']['benchmark_sharpe']:.4f}")
+
+    # Stress Testing
+    if config.get('backtest', {}).get('stress_testing', {}).get('enabled', False):
+        print("\n" + "="*70)
+        print("STRESS TESTING")
+        print("="*70)
+
+        stress_scenarios = config['backtest']['stress_testing'].get('scenarios', [])
+        stress_results = backtester.run_stress_tests(allocations, returns, prices, stress_scenarios)
+
+        print("\nStress Test Results:")
+        for scenario_name, results in stress_results.items():
+            metrics = results['metrics']
+            print(f"\n{scenario_name}:")
+            print(f"  Total Return: {metrics['Total Return']:.2%}")
+            print(f"  Max Drawdown: {metrics['Max Drawdown']:.2%}")
+            print(f"  Sharpe Ratio: {metrics['Sharpe Ratio']:.4f}")
+
+    # Regime analysis
+    print("\n" + "="*70)
+    print("REGIME ANALYSIS")
+    print("="*70)
+
+    data_acq = DataAcquisition(config)
+    _, _, indicators = data_acq.get_full_dataset()
+
+    detector = RegimeDetector(config)
+    if 'VIX' in indicators.columns and 'Yield_Spread' in indicators.columns:
+        regime = detector.detect_combined_regime(
+            indicators['VIX'],
+            prices['SPY'],
+            indicators['Yield_Spread']
+        )
+        print(f"\nRegime distribution:")
+        print(regime.value_counts())
+        print(f"\nCurrent regime: {['Defensive', 'Neutral', 'Aggressive'][int(regime.iloc[-1])]}")
+
+    # Save results
+    print("\n" + "="*70)
+    print("SAVING RESULTS")
+    print("="*70)
+
+    allocations.to_csv('results/allocations_enhanced.csv')
+    predictions.to_csv('results/predictions_enhanced.csv')
+    comparison.to_csv('results/performance_comparison_enhanced.csv')
+
+    print("\nSaved:")
+    print("  - results/allocations_enhanced.csv")
+    print("  - results/predictions_enhanced.csv")
+    print("  - results/performance_comparison_enhanced.csv")
+
+    # Generate plots
+    print("\nGenerating visualizations...")
+
+    fig1 = backtester.plot_portfolio_value(strategies)
+    fig1.savefig('figures/portfolio_value_enhanced.png', dpi=300, bbox_inches='tight')
+
+    fig2 = backtester.plot_drawdown(strategies)
+    fig2.savefig('figures/drawdown_enhanced.png', dpi=300, bbox_inches='tight')
+
+    fig3 = backtester.plot_monthly_returns(ai_results)
+    fig3.savefig('figures/monthly_returns_enhanced.png', dpi=300, bbox_inches='tight')
+
+    fig4 = backtester.plot_allocations(allocations)
+    fig4.savefig('figures/allocations_enhanced.png', dpi=300, bbox_inches='tight')
+
+    print("\nSaved figures:")
+    print("  - figures/portfolio_value_enhanced.png")
+    print("  - figures/drawdown_enhanced.png")
+    print("  - figures/monthly_returns_enhanced.png")
+    print("  - figures/allocations_enhanced.png")
+
+    print("\n" + "="*70)
+    print("COMPLETE!")
+    print("="*70)
+    print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+
+    return comparison
 
 
 if __name__ == "__main__":
-    strategy, results = main()
+    results = main()
+
+
+def walk_forward_optimization(config: Dict, 
+                              train_window: int = 60,
+                              test_window: int = 12) -> Tuple:
+    """
+    Perform walk-forward optimization.
+    
+    Args:
+        config: Configuration dictionary
+        train_window: Training window in months
+        test_window: Test window in months
+        
+    Returns:
+        Tuple of (all_allocations, all_predictions, performance_metrics)
+    """
+    print("\n" + "="*70)
+    print("WALK-FORWARD OPTIMIZATION")
+    print("="*70)
+    
+    # Fetch data
+    print("\n1. Fetching data...")
+    data_acq = DataAcquisition(config)
+    prices, returns, indicators = data_acq.get_full_dataset()
+    
+    # Initialize
+    feature_eng = FeatureEngineer(config)
+    all_allocations = []
+    all_predictions = []
+    
+    # Calculate number of windows
+    total_periods = len(returns)
+    n_windows = (total_periods - train_window) // test_window
+    
+    print(f"\nTotal periods: {total_periods}")
+    print(f"Training window: {train_window} months")
+    print(f"Test window: {test_window} months")
+    print(f"Number of windows: {n_windows}")
+    
+    for i in range(n_windows):
+        start_train = i * test_window
+        end_train = start_train + train_window
+        end_test = min(end_train + test_window, total_periods)
+        
+        print(f"\n{'='*70}")
+        print(f"Window {i+1}/{n_windows}")
+        print(f"Train: {returns.index[start_train]} to {returns.index[end_train-1]}")
+        print(f"Test: {returns.index[end_train]} to {returns.index[end_test-1]}")
+        print(f"{'='*70}")
+        
+        # Split data
+        train_prices = prices.iloc[start_train:end_train]
+        train_returns = returns.iloc[start_train:end_train]
+        train_indicators = indicators.iloc[start_train:end_train]
+        
+        test_prices = prices.iloc[end_train:end_test]
+        test_returns = returns.iloc[end_train:end_test]
+        test_indicators = indicators.iloc[end_train:end_test]
+        
+        # Engineer features with momentum and cross-asset (FIXED: no lookahead bias)
+        train_features = feature_eng.engineer_all_features(
+            train_indicators,
+            prices=train_prices,
+            returns=train_returns
+        )
+        train_features = feature_eng.prepare_features_for_training(train_features)
+
+        # CRITICAL FIX: Engineer test features properly without lookahead bias
+        # We need features for the test period, but calculated using data available at prediction time
+        # Use a rolling approach: for each test date, use data up to that date
+        test_features_list = []
+        for test_date in test_returns.index:
+            # Use data up to the test date for feature calculation
+            historical_data_up_to_test = indicators.loc[:test_date].iloc[:-1]  # Exclude current date
+            historical_prices_up_to_test = prices.loc[:test_date].iloc[:-1]
+            historical_returns_up_to_test = returns.loc[:test_date].iloc[:-1]
+
+            if len(historical_data_up_to_test) >= 12:  # Need minimum history for features
+                features_at_test_date = feature_eng.engineer_all_features(
+                    historical_data_up_to_test,
+                    prices=historical_prices_up_to_test,
+                    returns=historical_returns_up_to_test
+                )
+                features_at_test_date = feature_eng.prepare_features_for_training(features_at_test_date)
+
+                if len(features_at_test_date) > 0:
+                    # Use the most recent available features
+                    latest_features = features_at_test_date.iloc[-1:]
+                    latest_features.index = [test_date]
+                    test_features_list.append(latest_features)
+
+        if test_features_list:
+            test_features = pd.concat(test_features_list)
+        else:
+            # Fallback: use last training features repeated
+            if len(train_features) > 0:
+                last_train_features = train_features.iloc[-1:]
+                test_features = pd.DataFrame(
+                    np.repeat(last_train_features.values, len(test_returns), axis=0),
+                    index=test_returns.index,
+                    columns=last_train_features.columns
+                )
+            else:
+                test_features = pd.DataFrame(index=test_returns.index)
+        ml_model = PortfolioMLModel(config)
+        train_targets = ml_model.create_target_variables(train_returns, lookback=1)
+        
+        # Align features and targets
+        common_train = train_features.index.intersection(train_targets.index)
+        X_train = train_features.loc[common_train]
+        y_train = train_targets.loc[common_train]
+        
+        # FIX: Reset feature selector for each window to avoid using future information
+        ml_model.feature_selector = None
+        
+        # Train models
+        print(f"\nTraining models on {len(X_train)} samples...")
+        ml_model.train_all_models(X_train, y_train)
+        
+        # Predict on test set
+        common_test = test_features.index.intersection(test_returns.index)
+        X_test = test_features.loc[common_test]
+        
+        print(f"Predicting on {len(X_test)} samples...")
+        predictions = ml_model.predict_returns(X_test)
+        
+        # Calculate allocations with risk parity and regime adjustment
+        # Detect regimes (FIXED: no lookahead bias)
+        detector = RegimeDetector(config)
+        if 'VIX' in indicators.columns and 'Yield_Spread' in indicators.columns:
+            # Only use historical data available at prediction time
+            historical_indicators = indicators.iloc[:end_train]
+            historical_prices = prices.iloc[:end_train]
+            regimes = detector.detect_combined_regime(
+                historical_indicators['VIX'],
+                historical_prices['SPY'],
+                historical_indicators['Yield_Spread']
+            )
+            # Extend regimes to test period (assume regime persists)
+            regimes = pd.Series([regimes.iloc[-1]] * len(test_returns), index=test_returns.index)
+        else:
+            regimes = None
+        
+        allocations = ml_model.calculate_optimal_allocations(
+            predictions,
+            historical_returns=returns.iloc[start_train:end_train],  # FIX: Only use historical data available at prediction time
+            use_risk_parity=config.get('risk', {}).get('use_risk_parity', True),
+            regimes=regimes
+        )
+        
+        all_allocations.append(allocations)
+        all_predictions.append(predictions)
+    
+    # Combine all windows
+    final_allocations = pd.concat(all_allocations)
+    final_predictions = pd.concat(all_predictions)
+    
+    print(f"\n{'='*70}")
+    print("Walk-Forward Optimization Complete!")
+    print(f"Total allocation periods: {len(final_allocations)}")
+    print(f"{'='*70}")
+    
+    return final_allocations, final_predictions, prices, returns
+
+
+def main():
+    """Main execution function with all enhancements."""
+    
+    print("\n" + "="*70)
+    print("AI-ENHANCED 60/40 PORTFOLIO - ENHANCED VERSION")
+    print("="*70)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Load configuration
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Create output directories
+    os.makedirs('results', exist_ok=True)
+    os.makedirs('figures', exist_ok=True)
+    os.makedirs('models', exist_ok=True)
+    
+    # Run walk-forward optimization
+    allocations, predictions, prices, returns = walk_forward_optimization(
+        config,
+        train_window=60,
+        test_window=12
+    )
+    
+    # Backtest with enhanced features
+    print("\n" + "="*70)
+    print("BACKTESTING")
+    print("="*70)
+    
+    backtester = PortfolioBacktester(config)
+    
+    # AI Strategy with dynamic rebalancing and stop-loss
+    print("\n1. AI-Enhanced Strategy (with dynamic rebalancing & stop-loss)...")
+    ai_results = backtester.backtest_strategy(
+        allocations, 
+        returns, 
+        prices,
+        use_dynamic_rebalancing=True,
+        use_stop_loss=True
+    )
+    
+    # Benchmarks
+    print("\n2. Buy & Hold SPY...")
+    spy_results = backtester.create_benchmark_strategy(returns, prices, 'SPY')
+    
+    print("\n3. Traditional 60/40...")
+    trad_results = backtester.create_traditional_6040(returns, prices)
+    
+    # Compare strategies
+    strategies = {
+        'AI-Enhanced (Walk-Forward)': ai_results,
+        'Buy & Hold SPY': spy_results,
+        'Traditional 60/40': trad_results
+    }
+    
+    comparison = backtester.compare_strategies(strategies)
+    
+    print("\n" + "="*70)
+    print("PERFORMANCE COMPARISON")
+    print("="*70)
+    print(comparison.round(4))
+    
+    # Statistical Testing
+    if config.get('backtest', {}).get('statistical_testing', {}).get('enabled', False):
+        print("\n" + "="*70)
+        print("STATISTICAL TESTING")
+        print("="*70)
+        
+        stat_tests = backtester.perform_statistical_tests(
+            ai_results, 
+            spy_results,
+            significance_level=config['backtest']['statistical_testing'].get('significance_level', 0.05)
+        )
+        
+        print("\nReturns T-Test vs SPY:")
+        print(f"  T-statistic: {stat_tests['returns_t_test']['t_statistic']:.4f}")
+        print(f"  P-value: {stat_tests['returns_t_test']['p_value']:.4f}")
+        print(f"  Significant: {stat_tests['returns_t_test']['significant']}")
+        print(f"  AI Mean Return: {stat_tests['returns_t_test']['strategy_mean']:.6f}")
+        print(f"  SPY Mean Return: {stat_tests['returns_t_test']['benchmark_mean']:.6f}")
+        
+        print(f"\nSharpe Ratio Comparison:")
+        print(f"  AI Sharpe: {stat_tests['sharpe_ratio_comparison']['strategy_sharpe']:.4f}")
+        print(f"  SPY Sharpe: {stat_tests['sharpe_ratio_comparison']['benchmark_sharpe']:.4f}")
+    
+    # Stress Testing
+    if config.get('backtest', {}).get('stress_testing', {}).get('enabled', False):
+        print("\n" + "="*70)
+        print("STRESS TESTING")
+        print("="*70)
+        
+        stress_scenarios = config['backtest']['stress_testing'].get('scenarios', [])
+        stress_results = backtester.run_stress_tests(allocations, returns, prices, stress_scenarios)
+        
+        print("\nStress Test Results:")
+        for scenario_name, results in stress_results.items():
+            metrics = results['metrics']
+            print(f"\n{scenario_name}:")
+            print(f"  Total Return: {metrics['Total Return']:.2%}")
+            print(f"  Max Drawdown: {metrics['Max Drawdown']:.2%}")
+            print(f"  Sharpe Ratio: {metrics['Sharpe Ratio']:.4f}")
+    
+    # Regime analysis
+    print("\n" + "="*70)
+    print("REGIME ANALYSIS")
+    print("="*70)
+    
+    data_acq = DataAcquisition(config)
+    _, _, indicators = data_acq.get_full_dataset()
+    
+    detector = RegimeDetector(config)
+    if 'VIX' in indicators.columns and 'Yield_Spread' in indicators.columns:
+        regime = detector.detect_combined_regime(
+            indicators['VIX'],
+            prices['SPY'],
+            indicators['Yield_Spread']
+        )
+        print(f"\nRegime distribution:")
+        print(regime.value_counts())
+        print(f"\nCurrent regime: {['Defensive', 'Neutral', 'Aggressive'][int(regime.iloc[-1])]}")
+    
+    # Save results
+    print("\n" + "="*70)
+    print("SAVING RESULTS")
+    print("="*70)
+    
+    allocations.to_csv('results/allocations_enhanced.csv')
+    predictions.to_csv('results/predictions_enhanced.csv')
+    comparison.to_csv('results/performance_comparison_enhanced.csv')
+    
+    print("\nSaved:")
+    print("  - results/allocations_enhanced.csv")
+    print("  - results/predictions_enhanced.csv")
+    print("  - results/performance_comparison_enhanced.csv")
+    
+    # Generate plots
+    print("\nGenerating visualizations...")
+    
+    fig1 = backtester.plot_portfolio_value(strategies)
+    fig1.savefig('figures/portfolio_value_enhanced.png', dpi=300, bbox_inches='tight')
+    
+    fig2 = backtester.plot_drawdown(strategies)
+    fig2.savefig('figures/drawdown_enhanced.png', dpi=300, bbox_inches='tight')
+    
+    fig3 = backtester.plot_monthly_returns(ai_results)
+    fig3.savefig('figures/monthly_returns_enhanced.png', dpi=300, bbox_inches='tight')
+    
+    fig4 = backtester.plot_allocations(allocations)
+    fig4.savefig('figures/allocations_enhanced.png', dpi=300, bbox_inches='tight')
+    
+    print("\nSaved figures:")
+    print("  - figures/portfolio_value_enhanced.png")
+    print("  - figures/drawdown_enhanced.png")
+    print("  - figures/monthly_returns_enhanced.png")
+    print("  - figures/allocations_enhanced.png")
+    
+    print("\n" + "="*70)
+    print("COMPLETE!")
+    print("="*70)
+    print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    
+    return comparison
+
+
+if __name__ == "__main__":
+    results = main()

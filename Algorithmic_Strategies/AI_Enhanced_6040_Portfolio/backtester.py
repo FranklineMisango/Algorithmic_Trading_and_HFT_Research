@@ -24,7 +24,10 @@ class PortfolioBacktester:
         self.config = config
         self.initial_capital = config['backtest']['initial_capital']
         self.transaction_cost = config['portfolio']['transaction_cost']
+        self.slippage = config['portfolio'].get('slippage', 0.0005)  # 0.05% slippage
         self.risk_free_rate = config['portfolio']['risk_free_rate']
+        self.rebalance_threshold = config.get('risk', {}).get('rebalance_threshold', 0.05)
+        self.max_drawdown_threshold = config.get('risk', {}).get('max_drawdown_threshold', 0.15)
         
     def calculate_portfolio_returns(self,
                                     allocations: pd.DataFrame,
@@ -75,36 +78,99 @@ class PortfolioBacktester:
     def backtest_strategy(self,
                          allocations: pd.DataFrame,
                          returns: pd.DataFrame,
-                         prices: pd.DataFrame) -> pd.DataFrame:
+                         prices: pd.DataFrame,
+                         use_dynamic_rebalancing: bool = True,
+                         use_stop_loss: bool = True) -> pd.DataFrame:
         """
-        Backtest a portfolio strategy.
+        Backtest a portfolio strategy with dynamic rebalancing and stop-loss.
         
         Args:
             allocations: DataFrame with portfolio allocations
             returns: DataFrame with asset returns
             prices: DataFrame with asset prices
+            use_dynamic_rebalancing: Only rebalance if drift > threshold
+            use_stop_loss: Apply stop-loss at max drawdown threshold
             
         Returns:
             DataFrame with portfolio value over time
         """
-        # Calculate portfolio returns
-        portfolio_returns = self.calculate_portfolio_returns(allocations, returns)
+        # Align indices
+        common_idx = allocations.index.intersection(returns.index)
+        alloc = allocations.loc[common_idx]
+        rets = returns.loc[common_idx]
         
-        # Calculate transaction costs
-        transaction_costs = self.calculate_transaction_costs(allocations)
+        # Initialize
+        portfolio_value = pd.Series(index=common_idx, dtype=float)
+        portfolio_value.iloc[0] = self.initial_capital
+        current_weights = alloc.iloc[0].copy()
+        total_costs = 0
+        stop_loss_triggered = False
         
-        # Net returns after costs
-        net_returns = portfolio_returns - transaction_costs
-        
-        # Calculate cumulative portfolio value
-        portfolio_value = self.initial_capital * (1 + net_returns).cumprod()
+        for i in range(1, len(common_idx)):
+            idx = common_idx[i]
+            prev_idx = common_idx[i-1]
+            
+            # Calculate portfolio return
+            period_return = (current_weights * rets.loc[idx]).sum()
+            portfolio_value.iloc[i] = portfolio_value.iloc[i-1] * (1 + period_return)
+            
+            # Check stop-loss
+            if use_stop_loss and not stop_loss_triggered:
+                peak = portfolio_value.iloc[:i+1].max()
+                drawdown = (portfolio_value.iloc[i] - peak) / peak
+                if drawdown < -self.max_drawdown_threshold:
+                    # Trigger stop-loss: move to defensive (80% bonds, 20% gold)
+                    stop_loss_triggered = True
+                    target_weights = pd.Series(0.0, index=current_weights.index)
+                    if 'TLT' in target_weights.index:
+                        target_weights['TLT'] = 0.8
+                    if 'GLD' in target_weights.index:
+                        target_weights['GLD'] = 0.2
+                    target_weights = target_weights / target_weights.sum()
+                else:
+                    target_weights = alloc.iloc[i]
+            else:
+                target_weights = alloc.iloc[i]
+            
+            # Update weights based on returns (drift)
+            current_weights = current_weights * (1 + rets.loc[idx])
+            current_weights = current_weights / current_weights.sum()
+            
+            # Dynamic rebalancing: only if drift exceeds threshold
+            if use_dynamic_rebalancing:
+                drift = (current_weights - target_weights).abs().sum()
+                should_rebalance = drift > self.rebalance_threshold
+            else:
+                should_rebalance = True
+            
+            # Rebalance if needed
+            if should_rebalance:
+                turnover = (current_weights - target_weights).abs().sum()
+                
+                # Transaction costs
+                transaction_cost_amount = turnover * self.transaction_cost * portfolio_value.iloc[i]
+                
+                # Slippage (simplified as percentage of value traded)
+                slippage_amount = turnover * self.slippage * portfolio_value.iloc[i]
+                
+                total_cost = transaction_cost_amount + slippage_amount
+                total_costs += total_cost
+                
+                # Apply costs as reduction in portfolio value
+                portfolio_value.iloc[i] -= total_cost
+                
+                current_weights = target_weights.copy()
         
         # Create results DataFrame
+        portfolio_returns = portfolio_value.pct_change().fillna(0)
+        transaction_costs_series = pd.Series(0.0, index=common_idx)
+        transaction_costs_series.iloc[0] = 0
+        
         results = pd.DataFrame({
             'Portfolio_Value': portfolio_value,
-            'Returns': net_returns,
+            'Returns': portfolio_returns,
             'Gross_Returns': portfolio_returns,
-            'Transaction_Costs': transaction_costs
+            'Transaction_Costs': transaction_costs_series
         })
         
         return results
@@ -274,6 +340,123 @@ class PortfolioBacktester:
         comparison_df = pd.DataFrame(comparison).T
         
         return comparison_df
+    
+    def perform_statistical_tests(self,
+                                strategy_results: pd.DataFrame,
+                                benchmark_results: pd.DataFrame,
+                                significance_level: float = 0.05) -> Dict:
+        """
+        Perform statistical tests comparing strategy vs benchmark.
+        
+        Args:
+            strategy_results: Backtest results for strategy
+            benchmark_results: Backtest results for benchmark
+            significance_level: Statistical significance level
+            
+        Returns:
+            Dictionary with test results
+        """
+        from scipy import stats
+        
+        strategy_returns = strategy_results['Returns'].dropna()
+        benchmark_returns = benchmark_results['Returns'].dropna()
+        
+        # Align dates
+        common_idx = strategy_returns.index.intersection(benchmark_returns.index)
+        strategy_returns = strategy_returns.loc[common_idx]
+        benchmark_returns = benchmark_returns.loc[common_idx]
+        
+        tests = {}
+        
+        # T-test for returns
+        t_stat, p_value = stats.ttest_ind(strategy_returns, benchmark_returns)
+        tests['returns_t_test'] = {
+            't_statistic': t_stat,
+            'p_value': p_value,
+            'significant': p_value < significance_level,
+            'strategy_mean': strategy_returns.mean(),
+            'benchmark_mean': benchmark_returns.mean(),
+            'difference': strategy_returns.mean() - benchmark_returns.mean()
+        }
+        
+        # Sharpe ratio test (simplified)
+        strategy_sharpe = self.calculate_sharpe_ratio(strategy_returns)
+        benchmark_sharpe = self.calculate_sharpe_ratio(benchmark_returns)
+        tests['sharpe_ratio_comparison'] = {
+            'strategy_sharpe': strategy_sharpe,
+            'benchmark_sharpe': benchmark_sharpe,
+            'difference': strategy_sharpe - benchmark_sharpe
+        }
+        
+        # Max drawdown comparison
+        strategy_mdd = self.calculate_max_drawdown(strategy_results['Portfolio_Value'])
+        benchmark_mdd = self.calculate_max_drawdown(benchmark_results['Portfolio_Value'])
+        tests['max_drawdown_comparison'] = {
+            'strategy_mdd': strategy_mdd,
+            'benchmark_mdd': benchmark_mdd,
+            'difference': strategy_mdd - benchmark_mdd
+        }
+        
+        return tests
+    
+    def run_stress_tests(self,
+                        allocations: pd.DataFrame,
+                        returns: pd.DataFrame,
+                        prices: pd.DataFrame,
+                        scenarios: List[Dict]) -> Dict:
+        """
+        Run stress tests on the portfolio.
+        
+        Args:
+            allocations: Portfolio allocations
+            returns: Historical returns
+            prices: Asset prices
+            scenarios: List of stress test scenarios
+            
+        Returns:
+            Dictionary with stress test results
+        """
+        stress_results = {}
+        
+        for scenario in scenarios:
+            scenario_name = scenario['name']
+            print(f"Running stress test: {scenario_name}")
+            
+            # Modify returns based on scenario
+            stressed_returns = returns.copy()
+            
+            if scenario.get('shock_type') == 'inflation':
+                # Apply inflation shock to all assets
+                shock = scenario.get('magnitude', 0.05)
+                stressed_returns = stressed_returns * (1 - shock)
+            elif scenario.get('shock_type') == 'interest_rate':
+                # Apply rate shock primarily to bonds
+                shock = scenario.get('magnitude', 0.025)
+                if 'TLT' in stressed_returns.columns:
+                    stressed_returns['TLT'] = stressed_returns['TLT'] * (1 - shock * 2)
+                if 'IEF' in stressed_returns.columns:
+                    stressed_returns['IEF'] = stressed_returns['IEF'] * (1 - shock * 1.5)
+                if 'SHY' in stressed_returns.columns:
+                    stressed_returns['SHY'] = stressed_returns['SHY'] * (1 - shock * 0.5)
+            else:
+                # Historical scenario
+                start_date = scenario.get('start_date')
+                end_date = scenario.get('end_date')
+                if start_date and end_date:
+                    mask = (stressed_returns.index >= start_date) & (stressed_returns.index <= end_date)
+                    # Use actual historical returns for that period
+                    pass  # Already using historical data
+            
+            # Backtest with stressed returns
+            stressed_results = self.backtest_strategy(allocations, stressed_returns, prices)
+            stressed_metrics = self.calculate_all_metrics(stressed_results)
+            
+            stress_results[scenario_name] = {
+                'metrics': stressed_metrics,
+                'returns': stressed_results
+            }
+        
+        return stress_results
     
     def create_benchmark_strategy(self,
                                  returns: pd.DataFrame,

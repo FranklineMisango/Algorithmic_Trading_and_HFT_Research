@@ -5,6 +5,8 @@ scipy>=1.10.0
 
 # Machine Learning
 scikit-learn>=1.3.0
+xgboost>=2.0.0  # Optional: for XGBoost models
+# lightgbm>=4.0.0  # Optional: for LightGBM models (commented due to import issues)
 
 # Data Acquisition
 yfinance>=0.2.28
