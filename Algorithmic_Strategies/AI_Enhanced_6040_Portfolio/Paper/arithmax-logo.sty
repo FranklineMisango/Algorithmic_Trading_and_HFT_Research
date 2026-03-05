@@ -1,0 +1,50 @@
+%% arithmax-logo.sty
+%% Arithmax Research Logo Definition
+%% This file contains the official Arithmax Research logo integration
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{arithmax-logo}[2025/10/05 v2.0 Arithmax Research Logo Package]
+
+\RequirePackage{graphicx}
+\RequirePackage{xcolor}
+
+% Arithmax Research brand colors (extracted from logo)
+\definecolor{arithmaxblue}{RGB}{53,73,123}      % Dark navy blue from logo background
+\definecolor{arithmaxdarkblue}{RGB}{33,45,77}   % Darker blue
+\definecolor{arithmaxcyan}{RGB}{77,208,225}     % Cyan/teal from logo elements
+\definecolor{arithmaxgray}{RGB}{180,180,180}    % Light gray for text
+\definecolor{arithmaxwhite}{RGB}{255,255,255}   % White text from logo
+
+% Main logo command - uses the actual logo file
+\newcommand{\arithmaxlogo}[1][1]{%
+    \includegraphics[width=#1\textwidth]{Arithmax-research-logo.png}%
+}
+
+% Scaled logo with specific width
+\newcommand{\arithmaxlogoscaled}[1][3cm]{%
+    \includegraphics[width=#1]{Arithmax-research-logo.png}%
+}
+
+% Header logo - smaller version for page headers
+\newcommand{\arithmaxheaderlogo}[1][1.5cm]{%
+    \includegraphics[width=#1]{Arithmax-research-logo.png}%
+}
+
+% Watermark version (very light) - for background use
+\newcommand{\arithmaxwatermark}[1][0.15]{%
+    \begin{picture}(0,0)
+        \put(0,0){\makebox(0,0)[c]{\textcolor{black!10}{\includegraphics[width=8cm]{Arithmax-research-logo.png}}}}
+    \end{picture}%
+}
+
+% Logo for title pages - larger size
+\newcommand{\arithmaxtitlelogo}[1][4cm]{%
+    \includegraphics[width=#1]{Arithmax-research-logo.png}%
+}
+
+% Inline logo for text - very small
+\newcommand{\arithmaxinlinelogo}[1][0.8cm]{%
+    \raisebox{-0.1\height}{\includegraphics[width=#1]{Arithmax-research-logo.png}}%
+}
+
+\endinput

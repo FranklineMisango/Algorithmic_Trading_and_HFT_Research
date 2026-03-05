@@ -40,6 +40,15 @@ class DataAcquisition:
         else:
             self.end_date = config_end
         
+        # Check if start_date is before Bitcoin availability (2014-09-17)
+        start_date_obj = datetime.strptime(self.start_date, '%Y-%m-%d').date()
+        btc_start = datetime(2014, 9, 17).date()
+        if start_date_obj < btc_start:
+            print(f"Note: Bitcoin data only available from {btc_start}. Earlier periods will have 0% BTC allocation.")
+            self.btc_available_from = btc_start
+        else:
+            self.btc_available_from = None
+        
     def fetch_asset_prices(self) -> pd.DataFrame:
         """
         Fetch historical prices for all assets.
