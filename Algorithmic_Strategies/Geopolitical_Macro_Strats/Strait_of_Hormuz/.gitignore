@@ -2,3 +2,5 @@
 config.yaml
 appsettings.json
 Data/Databento/Original_Downloads
+.cache
+/__pycache__

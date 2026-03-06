@@ -417,62 +417,79 @@ class EnhancedNewsSentimentAnalyzer:
             # Query in smaller chunks (GDELT can return huge datasets)
             current_start = start_dt
             max_articles = 100  # Limit total articles
+            max_retries = 3  # Limit retries per date range
             
             while current_start < end_dt and len(all_articles) < max_articles:
                 current_end = min(current_start + pd.Timedelta(days=7), end_dt)
                 
-                try:
-                    # Format dates for GDELT (YYYY MM DD)
-                    gdelt_start = current_start.strftime('%Y %m %d')
-                    gdelt_end = current_end.strftime('%Y %m %d')
-                    
-                    print(f"    → Querying GDELT: {gdelt_start} to {gdelt_end}")
-                    
-                    # Fetch events table
-                    results = self.gdelt_client.Search(
-                        date=[gdelt_start, gdelt_end],
-                        table='events',
-                        coverage=False
-                    )
-                    
-                    if results is not None and len(results) > 0:
-                        # Filter for Iran/Hormuz-related events
-                        iran_mask = (
-                            (results['Actor1CountryCode'] == 'IRN') |
-                            (results['Actor2CountryCode'] == 'IRN') |
-                            (results['ActionGeo_CountryCode'] == 'IRN')
+                retry_count = 0
+                success = False
+                
+                while retry_count < max_retries and not success:
+                    try:
+                        # Format dates for GDELT (YYYY MM DD)
+                        gdelt_start = current_start.strftime('%Y %m %d')
+                        gdelt_end = current_end.strftime('%Y %m %d')
+                        
+                        print(f"    → Querying GDELT: {gdelt_start} to {gdelt_end}")
+                        
+                        # Fetch events table
+                        results = self.gdelt_client.Search(
+                            date=[gdelt_start, gdelt_end],
+                            table='events',
+                            coverage=False
                         )
                         
-                        iran_events = results[iran_mask]
-                        
-                        if len(iran_events) > 0:
-                            print(f"      Found {len(iran_events)} Iran-related events")
+                        if results is not None and len(results) > 0:
+                            # Filter for Iran/Hormuz-related events
+                            iran_mask = (
+                                (results['Actor1CountryCode'] == 'IRN') |
+                                (results['Actor2CountryCode'] == 'IRN') |
+                                (results['ActionGeo_CountryCode'] == 'IRN')
+                            )
                             
-                            # Extract articles from events
-                            for _, row in iran_events.head(20).iterrows():
-                                url = row.get('SOURCEURL', '')
-                                if url and url.startswith('http'):
-                                    actor1 = row.get('Actor1Name', 'Unknown')
-                                    actor2 = row.get('Actor2Name', 'Unknown')
-                                    event_code = row.get('EventCode', '')
-                                    
-                                    title = f"{actor1} - {actor2} (Event: {event_code})"
-                                    
-                                    all_articles.append({
-                                        'date': pd.to_datetime(str(row.get('SQLDATE', current_start))),
-                                        'title': title[:200],
-                                        'description': f"GDELT Event {event_code}",
-                                        'url': url,
-                                        'source_name': 'GDELT',
-                                        'source': 'GDELT'
-                                    })
+                            iran_events = results[iran_mask]
+                            
+                            if len(iran_events) > 0:
+                                print(f"      Found {len(iran_events)} Iran-related events")
+                                
+                                # Extract articles from events
+                                for _, row in iran_events.head(20).iterrows():
+                                    url = row.get('SOURCEURL', '')
+                                    if url and url.startswith('http'):
+                                        actor1 = row.get('Actor1Name', 'Unknown')
+                                        actor2 = row.get('Actor2Name', 'Unknown')
+                                        event_code = row.get('EventCode', '')
+                                        
+                                        title = f"{actor1} - {actor2} (Event: {event_code})"
+                                        
+                                        all_articles.append({
+                                            'date': pd.to_datetime(str(row.get('SQLDATE', current_start))),
+                                            'title': title[:200],
+                                            'description': f"GDELT Event {event_code}",
+                                            'url': url,
+                                            'source_name': 'GDELT',
+                                            'source': 'GDELT'
+                                        })
+                                success = True
+                            else:
+                                print(f"      No Iran-related events found")
+                                success = True  # Not an error, just no data
                         else:
-                            print(f"      No Iran-related events found")
-                    
-                except Exception as e:
-                    print(f"    ⚠ GDELT error for date range: {e}")
-                    continue
+                            print(f"      No results returned")
+                            success = True  # Not an error, just no data
+                        
+                    except Exception as e:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            print(f"    ⚠ GDELT error after {max_retries} retries: {e}")
+                            success = True  # Give up and move on
+                        else:
+                            print(f"    ⚠ GDELT error (retry {retry_count}/{max_retries}): {e}")
+                            import time
+                            time.sleep(2)  # Wait before retry
                 
+                # Move to next date range
                 current_start = current_end
             
             print(f"    ✓ Found {len(all_articles)} articles via GDELT")
