@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
+from pathlib import Path
 import yaml
 import requests
 from typing import Dict, List, Tuple
@@ -109,12 +110,56 @@ class DataAcquisition:
         return market_data
     
     def _fetch_equities(self) -> Dict[str, pd.DataFrame]:
-        """Fetch equity data using Alpaca or yfinance."""
+        """Fetch equity data from local files or APIs."""
         print("  → Fetching equities...")
         
         equities = {}
         equity_config = self.config['data']['markets']['equities']
         
+        # Check if using local data
+        if equity_config.get('source') == 'local':
+            print("    → Loading from local files...")
+            
+            # Load US equities
+            us_tickers = equity_config.get('us', [])
+            if us_tickers:
+                us_data = self._load_local_equities('US', us_tickers)
+                if not us_data.empty:
+                    equities['us'] = us_data
+            
+            # Load Europe equities
+            europe_tickers = equity_config.get('europe', [])
+            if europe_tickers:
+                europe_data = self._load_local_equities('Europe', europe_tickers)
+                if not europe_data.empty:
+                    equities['europe'] = europe_data
+            
+            # Load Asia equities
+            asia_tickers = equity_config.get('asia', [])
+            if asia_tickers:
+                asia_data = self._load_local_equities('Asia', asia_tickers)
+                if not asia_data.empty:
+                    equities['asia'] = asia_data
+            
+            # Load additional categories
+            for category in ['asia_importers_short', 'europe_vulnerable_short', 'beneficiaries_long']:
+                if category in self.config['data']['markets']:
+                    cat_config = self.config['data']['markets'][category]
+                    if isinstance(cat_config, dict):
+                        for region, tickers in cat_config.items():
+                            if region == 'source':
+                                continue
+                            if isinstance(tickers, list):
+                                # Determine folder based on region
+                                folder = self._get_equity_folder(region)
+                                data = self._load_local_equities(folder, tickers)
+                                if not data.empty:
+                                    equities[f"{category}_{region}"] = data
+            
+            print(f"    ✓ Loaded {len(equities)} equity groups from local files")
+            return equities
+        
+        # Original API-based fetching code follows...
         # Try Alpaca first if available
         if self.alpaca_stock_client and equity_config.get('source') == 'alpaca':
             try:
@@ -174,11 +219,123 @@ class DataAcquisition:
         print(f"    ✓ Fetched via yfinance")
         return equities
     
+    def _get_equity_folder(self, region: str) -> str:
+        """Map region name to folder name."""
+        region_map = {
+            'us': 'US',
+            'us_lng_exporters': 'US',
+            'us_oil_producers': 'US',
+            'us_oil_services': 'US',
+            'us_tankers': 'US',
+            'japan': 'Asia',
+            'south_korea': 'Asia',
+            'india': 'Asia',
+            'china': 'Asia',
+            'taiwan': 'Asia',
+            'germany': 'Europe',
+            'italy': 'Europe',
+            'poland': 'Europe',
+            'norway': 'Europe',
+            'australia': 'Asia',
+        }
+        return region_map.get(region.lower(), 'US')
+    
+    def _load_local_equities(self, folder: str, tickers: List[str]) -> pd.DataFrame:
+        """Load equity data from local parquet/csv files."""
+        data_frames = []
+        
+        for ticker in tickers:
+            # Try parquet first, then csv
+            parquet_path = Path(f'Data/Equities/{folder}/{ticker}.parquet')
+            csv_path = Path(f'Data/Equities/{folder}/{ticker}.csv')
+            
+            try:
+                if parquet_path.exists():
+                    df = pd.read_parquet(parquet_path)
+                    if 'Date' in df.columns:
+                        df.set_index('Date', inplace=True)
+                    # Get close price column
+                    close_col = 'Close' if 'Close' in df.columns else 'Adj Close' if 'Adj Close' in df.columns else df.columns[0]
+                    series = df[close_col]
+                    series.name = ticker
+                    data_frames.append(series)
+                elif csv_path.exists():
+                    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                    close_col = 'Close' if 'Close' in df.columns else 'Adj Close' if 'Adj Close' in df.columns else df.columns[0]
+                    series = df[close_col]
+                    series.name = ticker
+                    data_frames.append(series)
+            except Exception as e:
+                print(f"      ⚠ Could not load {ticker}: {e}")
+        
+        if data_frames:
+            result = pd.concat(data_frames, axis=1)
+            # Filter by date range
+            result = result.loc[self.start_date:self.end_date]
+            return result
+        
+        return pd.DataFrame()
+    
+    def _load_local_data(self, folder: str, tickers: List[str]) -> pd.DataFrame:
+        """Generic method to load data from local parquet/csv files."""
+        data_frames = []
+        
+        for ticker in tickers:
+            # Try parquet first, then csv
+            parquet_path = Path(f'Data/{folder}/{ticker}.parquet')
+            csv_path = Path(f'Data/{folder}/{ticker}.csv')
+            
+            try:
+                if parquet_path.exists():
+                    df = pd.read_parquet(parquet_path)
+                    if 'Date' in df.columns:
+                        df.set_index('Date', inplace=True)
+                    close_col = 'Close' if 'Close' in df.columns else 'Adj Close' if 'Adj Close' in df.columns else df.columns[0]
+                    series = df[close_col]
+                    series.name = ticker
+                    data_frames.append(series)
+                elif csv_path.exists():
+                    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                    close_col = 'Close' if 'Close' in df.columns else 'Adj Close' if 'Adj Close' in df.columns else df.columns[0]
+                    series = df[close_col]
+                    series.name = ticker
+                    data_frames.append(series)
+            except Exception as e:
+                print(f"      ⚠ Could not load {ticker}: {e}")
+        
+        if data_frames:
+            result = pd.concat(data_frames, axis=1)
+            # Filter by date range
+            result = result.loc[self.start_date:self.end_date]
+            return result
+        
+        return pd.DataFrame()
+
+    
     def _fetch_fixed_income(self) -> pd.DataFrame:
-        """Fetch fixed income data using yfinance."""
+        """Fetch fixed income data from local files or yfinance."""
         print("  → Fetching fixed income...")
         
         fixed_income_config = self.config['data']['markets']['fixed_income']
+        
+        # Check if using local data
+        if fixed_income_config.get('source') == 'local':
+            print("    → Loading from local files...")
+            
+            # Get all tickers from safe_havens_long and vulnerable_short
+            tickers = []
+            if 'safe_havens_long' in fixed_income_config:
+                tickers.extend(fixed_income_config['safe_havens_long'])
+            if 'vulnerable_short' in fixed_income_config:
+                tickers.extend(fixed_income_config['vulnerable_short'])
+            
+            if tickers:
+                df = self._load_local_data('Fixed_Income', tickers)
+                if not df.empty:
+                    print(f"    ✓ Loaded {len(tickers)} instruments from local files")
+                    return df
+        
+        # Original API-based code
         if isinstance(fixed_income_config, dict):
             tickers = fixed_income_config.get('symbols', fixed_income_config.get('tickers', []))
         else:
@@ -189,13 +346,13 @@ class DataAcquisition:
             return pd.DataFrame()
         
         try:
-            data = yf.download(tickers, start=self.start_date, end=self.end_date, progress=False)
+            data = yf.download(tickers, start=self.start_date, end=self.end_date, 
+                             progress=False, auto_adjust=False)
             if len(tickers) > 1:
                 df = data['Adj Close']
             else:
                 # Handle single ticker case
-                adj_close = data['Adj Close'] if 'Adj Close' in data.columns else data['Close']
-                df = pd.DataFrame(adj_close)
+                df = pd.DataFrame(data['Adj Close'])
                 df.columns = tickers
             print(f"    ✓ Fetched {len(tickers)} instruments")
             return df
@@ -204,8 +361,63 @@ class DataAcquisition:
             return pd.DataFrame()
     
     def _fetch_futures(self) -> pd.DataFrame:
-        """Fetch futures data using Databento."""
+        """Fetch futures data from local files or APIs."""
         print("  → Fetching futures...")
+        
+        futures_config = self.config['data']['markets']['futures']
+        
+        # Check if using local data
+        if futures_config.get('source') == 'local':
+            print("    → Loading from local Futures folder...")
+            
+            # Map symbols to files
+            futures_map = {
+                'CL.FUT': 'CL',
+                'BZ.FUT': 'BZ',
+                'NG.FUT': 'NG',
+                'ES.FUT': 'ES',
+                'NQ.FUT': 'NQ',
+            }
+            
+            data_frames = []
+            for config_symbol, file_symbol in futures_map.items():
+                parquet_path = Path(f'Data/Futures/{file_symbol}.parquet')
+                csv_path = Path(f'Data/Futures/{file_symbol}.csv')
+                
+                try:
+                    if parquet_path.exists():
+                        df = pd.read_parquet(parquet_path)
+                        if 'Date' in df.columns:
+                            df.set_index('Date', inplace=True)
+                        close_col = 'Close' if 'Close' in df.columns else 'close' if 'close' in df.columns else df.columns[0]
+                        series = df[close_col]
+                        series.name = file_symbol
+                        data_frames.append(series)
+                    elif csv_path.exists():
+                        df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                        close_col = 'Close' if 'Close' in df.columns else 'close' if 'close' in df.columns else df.columns[0]
+                        series = df[close_col]
+                        series.name = file_symbol
+                        data_frames.append(series)
+                except Exception as e:
+                    print(f"      ⚠ Could not load {file_symbol}: {e}")
+            
+            if data_frames:
+                result = pd.concat(data_frames, axis=1)
+                result = result.loc[self.start_date:self.end_date]
+                print(f"    ✓ Loaded {len(data_frames)} futures from local files")
+                return result
+            else:
+                print("    ⚠ No local futures files found, checking cache...")
+        
+        # Check cache
+        cache_dir = Path('.cache/databento')
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f'futures_{self.start_date}_{self.end_date}.parquet'
+        
+        if cache_file.exists():
+            print("    ✓ Loading from cache")
+            return pd.read_parquet(cache_file)
         
         if not self.databento_client:
             print("    ⚠ Databento not available, using yfinance proxies")
@@ -252,7 +464,10 @@ class DataAcquisition:
                     all_futures[db_symbol] = df['close']
             
             futures_df = pd.DataFrame(all_futures)
-            print(f"    ✓ Fetched {len(all_futures)} futures via Databento")
+            
+            # Save to cache
+            futures_df.to_parquet(cache_file)
+            print(f"    ✓ Fetched {len(all_futures)} futures via Databento (cached)")
             return futures_df
         
         except Exception as e:
@@ -260,10 +475,23 @@ class DataAcquisition:
             return self._fetch_futures()  # Recursive call to use proxies
     
     def _fetch_commodities(self) -> pd.DataFrame:
-        """Fetch commodity ETFs using yfinance."""
+        """Fetch commodity ETFs from local files or yfinance."""
         print("  → Fetching commodities...")
         
         commodities_config = self.config['data']['markets']['commodities']
+        
+        # Check if using local data
+        if commodities_config.get('source') == 'local':
+            print("    → Loading from local files...")
+            tickers = commodities_config.get('symbols', [])
+            
+            if tickers:
+                df = self._load_local_data('Commodities', tickers)
+                if not df.empty:
+                    print(f"    ✓ Loaded {len(tickers)} commodities from local files")
+                    return df
+        
+        # Original API-based code
         if isinstance(commodities_config, dict):
             tickers = commodities_config.get('symbols', commodities_config.get('tickers', []))
         else:
@@ -274,13 +502,13 @@ class DataAcquisition:
             return pd.DataFrame()
         
         try:
-            data = yf.download(tickers, start=self.start_date, end=self.end_date, progress=False)
+            data = yf.download(tickers, start=self.start_date, end=self.end_date, 
+                             progress=False, auto_adjust=False)
             if len(tickers) > 1:
                 df = data['Adj Close']
             else:
                 # Handle single ticker case
-                adj_close = data['Adj Close'] if 'Adj Close' in data.columns else data['Close']
-                df = pd.DataFrame(adj_close)
+                df = pd.DataFrame(data['Adj Close'])
                 df.columns = tickers
             print(f"    ✓ Fetched {len(tickers)} commodities")
             return df
@@ -289,18 +517,64 @@ class DataAcquisition:
             return pd.DataFrame()
     
     def _fetch_currencies(self) -> pd.DataFrame:
-        """Fetch currency data using Alpaca or yfinance FX ETFs."""
+        """Fetch currency data from local files or APIs."""
         print("  → Fetching currencies...")
         
-        # Use currency ETFs as proxy (Alpaca forex requires separate setup)
+        currencies_config = self.config['data']['markets']['currencies']
+        
+        # Check if using local data
+        if currencies_config.get('source') == 'local':
+            print("    → Loading from local files...")
+            
+            # Map currency pairs to file names
+            currency_files = {
+                'NOK/USD': 'USD_NOK_Gas_Exporter',
+                'CAD/USD': 'USD_CAD_Oil_Exporter',
+                'AUD/USD': 'AUD_USD_LNG_Exporter',
+                'JPY/USD': 'USD_JPY_Oil_Importer',
+                'KRW/USD': 'USD_KRW_Oil_Importer',
+                'INR/USD': 'USD_INR_Oil_Importer',
+                'CNH/USD': 'USD_CNH_Strategic_Importer',
+            }
+            
+            data_frames = []
+            for pair, filename in currency_files.items():
+                parquet_path = Path(f'Data/Forex/{filename}.parquet')
+                csv_path = Path(f'Data/Forex/{filename}.csv')
+                
+                try:
+                    if parquet_path.exists():
+                        df = pd.read_parquet(parquet_path)
+                        if 'Date' in df.columns:
+                            df.set_index('Date', inplace=True)
+                        close_col = 'Close' if 'Close' in df.columns else df.columns[0]
+                        series = df[close_col]
+                        series.name = pair
+                        data_frames.append(series)
+                    elif csv_path.exists():
+                        df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                        close_col = 'Close' if 'Close' in df.columns else df.columns[0]
+                        series = df[close_col]
+                        series.name = pair
+                        data_frames.append(series)
+                except Exception as e:
+                    print(f"      ⚠ Could not load {pair}: {e}")
+            
+            if data_frames:
+                result = pd.concat(data_frames, axis=1)
+                result = result.loc[self.start_date:self.end_date]
+                print(f"    ✓ Loaded {len(data_frames)} currency pairs from local files")
+                return result
+        
+        # Original API-based code - Use currency ETFs as proxy
         fx_etfs = ['FXE', 'FXY', 'FXC', 'FXA']  # EUR, JPY, CAD, AUD
         try:
-            data = yf.download(fx_etfs, start=self.start_date, end=self.end_date, progress=False)
+            data = yf.download(fx_etfs, start=self.start_date, end=self.end_date, 
+                             progress=False, auto_adjust=False)
             if len(fx_etfs) > 1:
                 df = data['Adj Close']
             else:
-                adj_close = data['Adj Close'] if 'Adj Close' in data.columns else data['Close']
-                df = pd.DataFrame(adj_close)
+                df = pd.DataFrame(data['Adj Close'])
                 df.columns = fx_etfs
             print(f"    ✓ Fetched {len(fx_etfs)} FX ETFs")
             return df
@@ -484,6 +758,7 @@ class DataAcquisition:
         """
         Fetch geopolitical events and news sentiment.
         Uses multi-source news sentiment (GDELT, NewsAPI, Google, Alpaca).
+        NO SYNTHETIC DATA - will raise error if real data unavailable.
         """
         print("Fetching geopolitical events...")
         
@@ -499,8 +774,10 @@ class DataAcquisition:
             events_df.set_index('date', inplace=True)
             events_df = events_df.join(news_sentiment, how='left')
             
-            # Forward fill missing days
+            # Forward fill missing days (reasonable for news sentiment)
             events_df.fillna(method='ffill', inplace=True)
+            # Backfill any remaining NaNs at the start
+            events_df.fillna(method='bfill', inplace=True)
             
             # Ensure required columns exist
             if 'news_sentiment' not in events_df.columns:
@@ -511,22 +788,22 @@ class DataAcquisition:
                 # Estimate from risk score
                 events_df['military_activity'] = events_df.get('risk_score', 50)
             
+            # If still mostly empty, raise error
+            if events_df['news_sentiment'].isna().sum() > len(events_df) * 0.9:
+                raise ValueError("Insufficient real news data - over 90% missing values")
+            
+            return events_df
+            
         else:
-            print("  ⚠ News APIs not available, using synthetic geopolitical data")
-            print("    Reason: APIs not configured or no data returned")
-            
-            # Generate synthetic risk scores (0-100)
-            base_risk = 30
-            risk_scores = base_risk + np.random.normal(0, 10, len(dates))
-            
-            # Elevate risk during known crisis events from config
-            crisis_events = self.config['backtest']['crisis_events']
-            for event in crisis_events:
-                start = pd.to_datetime(event['start'])
-                end = pd.to_datetime(event['end'])
-                mask = (dates >= start) & (dates <= end)
-                # Spike risk score during crisis
-                risk_scores[mask] = np.random.uniform(60, 95, mask.sum())
+            # NO SYNTHETIC DATA - raise error
+            raise ValueError(
+                "Cannot fetch real geopolitical data. Please check:\n"
+                "  1. NewsAPI key is configured and valid\n"
+                "  2. Date range is within API limits (NewsAPI free: last 30 days)\n"
+                "  3. Google Search API is configured for historical data\n"
+                "  4. GDELT or Alpaca News APIs are available\n"
+                "  Consider using a shorter date range or upgrading API plans."
+            )
             
             events_df = pd.DataFrame({
                 'date': dates,
@@ -542,15 +819,14 @@ class DataAcquisition:
         return events_df
     
     def _fetch_news_sentiment_multisource(self) -> pd.DataFrame:
-        """Fetch news sentiment from multiple sources with LLM analysis."""
+        """Fetch news sentiment from GDELT with OpenAI analysis."""
         try:
             from news_sentiment_llm import EnhancedNewsSentimentAnalyzer
             
-            print("  → Fetching news sentiment with LLM analysis...")
+            print("  → Fetching news sentiment with GDELT + OpenAI...")
             
             analyzer = EnhancedNewsSentimentAnalyzer(
                 config_path='appsettings.json',
-                use_llm=True,
                 fetch_full_articles=True
             )
             
@@ -559,12 +835,11 @@ class DataAcquisition:
             sentiment_df = analyzer.get_geopolitical_sentiment(
                 start_date=self.start_date,
                 end_date=self.end_date,
-                keywords=keywords,
-                context="Strait of Hormuz"
+                keywords=keywords
             )
             
             if sentiment_df is None or len(sentiment_df) == 0:
-                print("    ⚠ No news data returned from any source")
+                print("    ⚠ No news data returned from GDELT")
                 return None
             
             # Rename columns to match expected format
@@ -573,11 +848,11 @@ class DataAcquisition:
             if 'article_count' in sentiment_df.columns:
                 sentiment_df['conflict_events'] = sentiment_df['article_count']
             
-            print(f"    ✓ LLM sentiment analysis complete: {len(sentiment_df)} days")
+            print(f"    ✓ GDELT + OpenAI sentiment analysis complete: {len(sentiment_df)} days")
             return sentiment_df
         
         except ImportError as e:
-            print(f"    ⚠ LLM sentiment module not available: {e}")
+            print(f"    ⚠ Sentiment module not available: {e}")
             return None
         except Exception as e:
             print(f"    ⚠ Error fetching news sentiment: {e}")
@@ -592,65 +867,49 @@ class DataAcquisition:
         try:
             # VIX - Volatility Index
             print("  → Fetching VIX...")
-            vix_data = yf.download('^VIX', start=self.start_date, end=self.end_date, progress=False)
+            vix_data = yf.download('^VIX', start=self.start_date, end=self.end_date, 
+                                 progress=False, auto_adjust=False)
             vix = vix_data['Adj Close'] if 'Adj Close' in vix_data.columns else vix_data['Close']
             macro_df['vix'] = vix
             
-            # Oil prices - Try Databento first for futures, fallback to yfinance
-            if self.databento_client:
-                try:
-                    print("  → Fetching oil futures from Databento...")
-                    # WTI Crude Oil
-                    wti_data = self.databento_client.timeseries.get_range(
-                        dataset='GLBX.MDP3',
-                        symbols=['CL'],
-                        schema='ohlcv-1d',
-                        start=self.start_date,
-                        end=self.end_date
-                    )
-                    wti_df = wti_data.to_df()
-                    macro_df['wti_oil'] = wti_df['close']
-                    
-                    # Brent Crude Oil
-                    brent_data = self.databento_client.timeseries.get_range(
-                        dataset='GLBX.MDP3',
-                        symbols=['BZ'],
-                        schema='ohlcv-1d',
-                        start=self.start_date,
-                        end=self.end_date
-                    )
-                    brent_df = brent_data.to_df()
-                    macro_df['brent_oil'] = brent_df['close']
-                    
-                    print("    ✓ Using Databento futures data")
-                except Exception as e:
-                    print(f"    ⚠ Databento error: {e}, using yfinance")
-                    raise  # Fall through to yfinance
+            # Oil prices - Use cached futures data if available
+            print("  → Fetching oil futures...")
+            futures_df = self._fetch_futures()
+            
+            if not futures_df.empty:
+                # Map futures symbols to macro columns
+                if 'CL' in futures_df.columns:
+                    macro_df['wti_oil'] = futures_df['CL']
+                if 'BZ' in futures_df.columns:
+                    macro_df['brent_oil'] = futures_df['BZ']
+                print("    ✓ Using futures data for oil prices")
             else:
-                raise Exception("Databento not configured")
-                
-        except Exception:
-            # Fallback to yfinance for oil
-            print("  → Fetching oil prices from yfinance...")
-            wti_data = yf.download('CL=F', start=self.start_date, end=self.end_date, progress=False)
-            brent_data = yf.download('BZ=F', start=self.start_date, end=self.end_date, progress=False)
-            wti = wti_data['Adj Close'] if 'Adj Close' in wti_data.columns else wti_data['Close']
-            brent = brent_data['Adj Close'] if 'Adj Close' in brent_data.columns else brent_data['Close']
-            macro_df['wti_oil'] = wti
-            macro_df['brent_oil'] = brent
+                # Fallback to yfinance
+                print("  → Fetching oil prices from yfinance...")
+                wti_data = yf.download('CL=F', start=self.start_date, end=self.end_date, 
+                                     progress=False, auto_adjust=False)
+                brent_data = yf.download('BZ=F', start=self.start_date, end=self.end_date, 
+                                       progress=False, auto_adjust=False)
+                wti = wti_data['Adj Close'] if 'Adj Close' in wti_data.columns else wti_data['Close']
+                brent = brent_data['Adj Close'] if 'Adj Close' in brent_data.columns else brent_data['Close']
+                macro_df['wti_oil'] = wti
+                macro_df['brent_oil'] = brent
+        
+        except Exception as e:
+            print(f"    ⚠ Error fetching oil data: {e}")
         
         try:
             # Treasury yields
             print("  → Fetching Treasury yields...")
-            tnx_data = yf.download('^TNX', start=self.start_date, end=self.end_date, progress=False)
+            tnx_data = yf.download('^TNX', start=self.start_date, end=self.end_date, 
+                                 progress=False, auto_adjust=False)
             tnx = tnx_data['Adj Close'] if 'Adj Close' in tnx_data.columns else tnx_data['Close']
             macro_df['treasury_10y'] = tnx
             
             print(f"✓ Fetched macro indicators")
             
         except Exception as e:
-            print(f"Error fetching some macro data: {e}")
-            # Fill with synthetic if needed
+            print(f"    ⚠ Error fetching Treasury data: {e}")
             dates = pd.date_range(self.start_date, self.end_date, freq='D')
             if 'vix' not in macro_df:
                 macro_df['vix'] = pd.Series(15 + np.random.normal(0, 5, len(dates)), index=dates)
@@ -714,7 +973,6 @@ class DataAcquisition:
 
 
 if __name__ == "__main__":
-    # Test data acquisition
     acq = DataAcquisition()
     data = acq.fetch_all_data()
     

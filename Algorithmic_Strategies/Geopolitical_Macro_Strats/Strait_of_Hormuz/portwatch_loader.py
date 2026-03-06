@@ -12,7 +12,7 @@ from typing import Optional
 class PortWatchLoader:
     """Load and process PortWatch IMF shipping data."""
     
-    def __init__(self, data_dir: str = 'shipping_data_portwatch_imf'):
+    def __init__(self, data_dir: str = 'Data/Portwatch_Shipment_Data'):
         """Initialize with data directory."""
         self.data_dir = Path(data_dir)
         self.arrivals_file = self.data_dir / 'arrivals-of-ships.csv'

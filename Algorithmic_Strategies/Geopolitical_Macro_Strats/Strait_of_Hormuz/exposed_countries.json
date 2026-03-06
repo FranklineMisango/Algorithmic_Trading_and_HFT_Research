@@ -1,0 +1,124 @@
+{
+  "strait_of_hormuz_energy_exposure_2026": {
+    "high_risk_importers_asia": [
+      {
+        "country": "Japan",
+        "risk_score": 6.4,
+        "oil_exposure_pct": 75,
+        "fossil_fuel_dependency": "87% of total energy usage",
+        "status": "Highest overall risk due to lack of domestic production"
+      },
+      {
+        "country": "South Korea",
+        "risk_score": 5.3,
+        "oil_exposure_pct": 70,
+        "lng_exposure_pct": 20,
+        "economic_impact": "Net oil imports equal 2.7% of GDP; 81% fossil fuel dependency"
+      },
+      {
+        "country": "India",
+        "risk_score": 4.9,
+        "oil_exposure_pct": 60,
+        "lng_exposure_pct": 53,
+        "vulnerability": "Price-sensitive economy hit by $130/bbl oil and Brent-indexed LNG"
+      },
+      {
+        "country": "China",
+        "risk_score": 4.4,
+        "oil_volume_share": "37.7% of all Hormuz flows",
+        "mitigation": "Russian pipelines and large strategic petroleum reserves (SPR)"
+      },
+      {
+        "country": "Taiwan",
+        "lng_exposure_pct": 33,
+        "vulnerability": "100% reliant on imported gas; one-third transits the Strait"
+      }
+    ],
+    "exposed_european_economies": [
+      {
+        "country": "Italy",
+        "lng_exposure_pct": 45,
+        "vulnerability": "Heavily reliant on Qatari LNG for power; gas prices hit €60/MWh"
+      },
+      {
+        "country": "Belgium",
+        "lng_exposure_pct": 38,
+        "vulnerability": "Major regasification hub; highly sensitive to maritime supply stops"
+      },
+      {
+        "country": "Poland",
+        "lng_exposure_pct": 38,
+        "vulnerability": "Recent pivot from Russia increased dependence on Gulf LNG"
+      },
+      {
+        "country": "Germany",
+        "exposure_type": "Industrial/Economic",
+        "impact": "60% surge in Dutch TTF gas prices threatens manufacturing output"
+      }
+    ],
+    "high_vulnerability_south_asia": [
+      {
+        "country": "Pakistan",
+        "lng_source_reliance_pct": 99,
+        "primary_suppliers": ["Qatar", "UAE"],
+        "status": "Critical energy shortage; no alternative procurement"
+      },
+      {
+        "country": "Bangladesh",
+        "lng_source_reliance_pct": 72,
+        "impact": "Structural gas deficit exceeding 1,300 million cubic feet/day"
+      }
+    ],
+    "locked_in_regional_exporters": [
+      {
+        "country": "Qatar",
+        "exposure": "Critical",
+        "lng_share": "93% of all Strait LNG",
+        "bypass_options": "None (seaborne only)"
+      },
+      {
+        "country": "Kuwait",
+        "exposure": "Critical",
+        "oil_share": "10% of Hormuz crude",
+        "bypass_options": "None"
+      },
+      {
+        "country": "Iraq",
+        "exposure": "Critical",
+        "vulnerability": "90% of revenue at risk; limited northern pipeline capacity"
+      }
+    ],
+    "partially_mitigated_exporters": [
+      {
+        "country": "Saudi Arabia",
+        "bypass_route": "East-West Pipeline to Red Sea (Yanbu)",
+        "capacity_bpd": "5.0M - 7.0M",
+        "remaining_risk": "LNG remains 100% blocked; Red Sea ports under drone threat"
+      },
+      {
+        "country": "United Arab Emirates",
+        "bypass_route": "ADCOP Pipeline to Fujairah",
+        "capacity_bpd": "1.5M - 1.8M",
+        "remaining_risk": "Fujairah terminal faces high insurance premiums and military risk"
+      }
+    ],
+    "strategic_beneficiaries": [
+      {
+        "country": "Russia",
+        "benefit": "Captures Asian market share; profits from $130/bbl price spike"
+      },
+      {
+        "country": "United States",
+        "benefit": "Net exporter status; US LNG fills the gap for European buyers"
+      },
+      {
+        "country": "Norway",
+        "benefit": "Primary alternative gas supplier for EU; record Equinor profits"
+      },
+      {
+        "country": "Australia",
+        "benefit": "Redirects spot LNG to high-premium Japan/Korea markets"
+      }
+    ]
+  }
+}

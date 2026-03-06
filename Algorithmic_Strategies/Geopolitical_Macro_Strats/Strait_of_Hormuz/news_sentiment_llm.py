@@ -35,27 +35,7 @@ try:
 except ImportError:
     GDELT_AVAILABLE = False
 
-try:
-    from newsapi import NewsApiClient
-    NEWSAPI_AVAILABLE = True
-except ImportError:
-    NEWSAPI_AVAILABLE = False
-
-try:
-    from alpaca.data.historical import NewsClient
-    from alpaca.data.requests import NewsRequest
-    ALPACA_NEWS_AVAILABLE = True
-except ImportError:
-    ALPACA_NEWS_AVAILABLE = False
-
-# LLM imports
-try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ANTHROPIC_AVAILABLE = False
-    print("⚠ Anthropic not installed. Run: pip install anthropic")
-
+# LLM imports - OpenAI only
 try:
     import openai
     OPENAI_AVAILABLE = True
@@ -228,31 +208,22 @@ class TextChunker:
 
 
 class LLMSentimentAnalyzer:
-    """LLM-based sentiment analysis for geopolitical news."""
+    """OpenAI-based sentiment analysis for geopolitical news."""
     
-    def __init__(self, provider: str = 'openai', model: str = None, api_key: str = None):
-        self.provider = provider.lower()
+    def __init__(self, model: str = None, api_key: str = None):
         self.cache_dir = Path('.cache/sentiment')
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        if self.provider == 'anthropic':
-            if not ANTHROPIC_AVAILABLE:
-                raise ImportError("Anthropic not installed")
-            key = api_key or os.getenv('ANTHROPIC_API_KEY')
-            if not key:
-                raise ValueError("ANTHROPIC_API_KEY not found in environment or config")
-            self.client = anthropic.Anthropic(api_key=key)
-            self.model = model or 'claude-3-5-sonnet-20241022'
-        elif self.provider == 'openai':
-            if not OPENAI_AVAILABLE:
-                raise ImportError("OpenAI not installed")
-            key = api_key or os.getenv('OPENAI_API_KEY')
-            if not key:
-                raise ValueError("OPENAI_API_KEY not found in environment or config")
-            self.client = openai.OpenAI(api_key=key)
-            self.model = model or 'gpt-4o-mini'
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        if not OPENAI_AVAILABLE:
+            raise ImportError("OpenAI not installed. Run: pip install openai")
+        
+        key = api_key or os.getenv('OPENAI_API_KEY')
+        if not key:
+            raise ValueError("OPENAI_API_KEY not found in environment or config")
+        
+        self.client = openai.OpenAI(api_key=key)
+        self.model = model or 'gpt-4o-mini'
+        print(f"✓ OpenAI client initialized (model: {self.model})")
     
     def _get_cache_key(self, text: str) -> str:
         """Generate cache key for text."""
@@ -298,20 +269,12 @@ Be precise: differentiate between speculation (-0.3), confirmed threats (-0.6), 
 Focus on: military actions, trade disruptions, sanctions, diplomatic relations, economic impacts."""
         
         try:
-            if self.provider == 'anthropic':
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                result_text = response.content[0].text
-            else:  # openai
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"}
-                )
-                result_text = response.choices[0].message.content
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            result_text = response.choices[0].message.content
             
             # Parse JSON response
             result = json.loads(result_text)
@@ -379,10 +342,9 @@ Focus on: military actions, trade disruptions, sanctions, diplomatic relations, 
 
 
 class EnhancedNewsSentimentAnalyzer:
-    """Enhanced multi-source news sentiment with LLM analysis."""
+    """GDELT + OpenAI news sentiment analyzer (simplified)."""
     
     def __init__(self, config_path: str = 'appsettings.json',
-                 llm_provider: str = 'openai',
                  fetch_full_articles: bool = True):
         # Load config
         with open(config_path, 'r') as f:
@@ -394,111 +356,208 @@ class EnhancedNewsSentimentAnalyzer:
         self.article_fetcher = ArticleFetcher() if fetch_full_articles else None
         self.text_chunker = TextChunker()
         
-        # Get LLM config from appsettings.json
-        llm_config = self.config.get('OpenAI', {}) if llm_provider == 'openai' else self.config.get('Anthropic', {})
-        api_key = llm_config.get('ApiKey') or os.getenv(f'{llm_provider.upper()}_API_KEY')
-        model = llm_config.get('ModelId')
+        # Get OpenAI config from appsettings.json
+        openai_config = self.config.get('OpenAI', {})
+        api_key = openai_config.get('ApiKey') or os.getenv('OPENAI_API_KEY')
+        model = openai_config.get('ModelId')
         
         self.llm_analyzer = LLMSentimentAnalyzer(
-            provider=llm_provider,
             model=model,
             api_key=api_key
         )
         
-        # Initialize news API clients (reuse from original)
+        # Initialize GDELT only
         self.gdelt_client = None
-        self.newsapi_client = None
-        self.alpaca_news_client = None
-        self.google_api_key = None
-        self.google_search_engine_id = None
         
         self._init_clients()
     
     def _init_clients(self):
-        """Initialize news API clients."""
+        """Initialize GDELT client."""
         if GDELT_AVAILABLE:
             try:
                 self.gdelt_client = gdelt.gdelt(version=2)
                 print("✓ GDELT client initialized")
             except Exception as e:
                 print(f"⚠ GDELT initialization failed: {e}")
+        else:
+            print("⚠ GDELT not available. Install with: pip install gdelt")
         
-        if NEWSAPI_AVAILABLE:
-            api_key = os.getenv('NEWS_API_KEY') or self.config.get('NewsApi', {}).get('ApiKey')
-            if api_key:
-                try:
-                    self.newsapi_client = NewsApiClient(api_key=api_key)
-                    print("✓ NewsAPI client initialized")
-                except Exception as e:
-                    print(f"⚠ NewsAPI initialization failed: {e}")
-        
-        if ALPACA_NEWS_AVAILABLE:
-            api_key = self.config.get('Alpaca', {}).get('ApiKey')
-            secret_key = self.config.get('Alpaca', {}).get('SecretKey')
-            if api_key and secret_key:
-                try:
-                    self.alpaca_news_client = NewsClient(api_key, secret_key)
-                    print("✓ Alpaca News client initialized")
-                except Exception as e:
-                    print(f"⚠ Alpaca News initialization failed: {e}")
-        
-        google_config = self.config.get('GoogleSearch', {})
-        self.google_api_key = google_config.get('ApiKey')
-        self.google_search_engine_id = google_config.get('SearchEngineId')
-        if self.google_api_key and self.google_search_engine_id:
-            print("✓ Google Search API configured")
-        
-        print(f"✓ LLM Sentiment Analyzer initialized ({self.llm_analyzer.provider})")
+        print(f"✓ Using OpenAI for sentiment analysis")
 
     
-    def fetch_newsapi_articles(self, start_date: str, end_date: str,
+    def fetch_gdelt_articles(self, start_date: str, end_date: str,
                                keywords: List[str]) -> pd.DataFrame:
-        """Fetch articles from NewsAPI."""
-        if not self.newsapi_client:
+        """Fetch articles from GDELT (primary source)."""
+        if not self.gdelt_client:
+            print("    ⚠ GDELT not available")
             return pd.DataFrame()
         
-        print("  → Fetching NewsAPI articles...")
-        all_processed = []
-        
-        for keyword in keywords[:3]:
-            try:
-                all_articles = self.newsapi_client.get_everything(
-                    q=keyword,
-                    from_param=start_date,
-                    to=end_date,
-                    language='en',
-                    sort_by='relevancy',
-                    page_size=100
-                )
-                
-                if all_articles and 'articles' in all_articles:
-                    for article in all_articles['articles']:
-                        all_processed.append({
-                            'date': pd.to_datetime(article['publishedAt']),
-                            'title': article.get('title', ''),
-                            'description': article.get('description', ''),
-                            'url': article.get('url', ''),
-                            'source_name': article.get('source', {}).get('name', 'Unknown'),
-                            'source': 'NewsAPI'
-                        })
-            except Exception as e:
-                print(f"    ⚠ Error fetching keyword '{keyword}': {e}")
-                continue
+        print("  → Fetching GDELT articles...")
+        all_processed = self._fetch_gdelt_articles(start_date, end_date, keywords)
         
         if not all_processed:
+            print("    ⚠ No articles found from GDELT")
             return pd.DataFrame()
         
         df = pd.DataFrame(all_processed)
         df = df.drop_duplicates(subset=['url'], keep='first')
-        print(f"    ✓ Fetched {len(df)} NewsAPI articles")
+        print(f"    ✓ Fetched {len(df)} articles from GDELT")
         
         return df
     
+    def _fetch_gdelt_articles(self, start_date: str, end_date: str,
+                             keywords: List[str]) -> List[Dict]:
+        """Fetch articles using GDELT (free, historical data available)."""
+        all_articles = []
+        
+        try:
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            
+            # Query in smaller chunks (GDELT can return huge datasets)
+            current_start = start_dt
+            max_articles = 100  # Limit total articles
+            
+            while current_start < end_dt and len(all_articles) < max_articles:
+                current_end = min(current_start + pd.Timedelta(days=7), end_dt)
+                
+                try:
+                    # Format dates for GDELT (YYYY MM DD)
+                    gdelt_start = current_start.strftime('%Y %m %d')
+                    gdelt_end = current_end.strftime('%Y %m %d')
+                    
+                    print(f"    → Querying GDELT: {gdelt_start} to {gdelt_end}")
+                    
+                    # Fetch events table
+                    results = self.gdelt_client.Search(
+                        date=[gdelt_start, gdelt_end],
+                        table='events',
+                        coverage=False
+                    )
+                    
+                    if results is not None and len(results) > 0:
+                        # Filter for Iran/Hormuz-related events
+                        iran_mask = (
+                            (results['Actor1CountryCode'] == 'IRN') |
+                            (results['Actor2CountryCode'] == 'IRN') |
+                            (results['ActionGeo_CountryCode'] == 'IRN')
+                        )
+                        
+                        iran_events = results[iran_mask]
+                        
+                        if len(iran_events) > 0:
+                            print(f"      Found {len(iran_events)} Iran-related events")
+                            
+                            # Extract articles from events
+                            for _, row in iran_events.head(20).iterrows():
+                                url = row.get('SOURCEURL', '')
+                                if url and url.startswith('http'):
+                                    actor1 = row.get('Actor1Name', 'Unknown')
+                                    actor2 = row.get('Actor2Name', 'Unknown')
+                                    event_code = row.get('EventCode', '')
+                                    
+                                    title = f"{actor1} - {actor2} (Event: {event_code})"
+                                    
+                                    all_articles.append({
+                                        'date': pd.to_datetime(str(row.get('SQLDATE', current_start))),
+                                        'title': title[:200],
+                                        'description': f"GDELT Event {event_code}",
+                                        'url': url,
+                                        'source_name': 'GDELT',
+                                        'source': 'GDELT'
+                                    })
+                        else:
+                            print(f"      No Iran-related events found")
+                    
+                except Exception as e:
+                    print(f"    ⚠ GDELT error for date range: {e}")
+                    continue
+                
+                current_start = current_end
+            
+            print(f"    ✓ Found {len(all_articles)} articles via GDELT")
+            
+        except Exception as e:
+            print(f"    ⚠ GDELT query failed: {e}")
+        
+        return all_articles
+    
     def analyze_article(self, article: Dict, context: str = "Strait of Hormuz") -> Dict:
-        """Analyze a single article with LLM."""
+        """Analyze a single article with LLM, fallback to rule-based if LLM fails."""
         url = article.get('url', '')
+        text = f"{article.get('title', '')} {article.get('description', '')}"
         
         # Fetch full article if enabled
+        if self.fetch_full_articles and url:
+            print(f"    → Fetching full article: {url[:60]}...")
+            full_article = self.article_fetcher.fetch_article(url)
+            
+            if full_article and full_article['length'] > 500:
+                text = full_article['text']
+                print(f"      Split into chunks")
+        
+        # Try LLM analysis first
+        try:
+            if len(text) > 8000:
+                chunks = self.text_chunker.chunk_text(text)
+                analysis = self.llm_analyzer.analyze_chunks(chunks, context)
+            else:
+                analysis = self.llm_analyzer.analyze_sentiment(text, context)
+            
+            # Check if LLM actually worked (confidence > 0 means it worked)
+            if analysis.get('confidence', 0) > 0:
+                analysis['used_full_article'] = self.fetch_full_articles
+                analysis['article_length'] = len(text)
+                return analysis
+            else:
+                # LLM failed, use rule-based
+                print(f"      ⚠ LLM failed, using rule-based sentiment")
+                return self._rule_based_sentiment(text)
+                
+        except Exception as e:
+            print(f"      ⚠ LLM error, using rule-based sentiment: {e}")
+            return self._rule_based_sentiment(text)
+    
+    def _rule_based_sentiment(self, text: str) -> Dict:
+        """Simple rule-based sentiment analysis as fallback."""
+        text_lower = text.lower()
+        
+        # Negative keywords
+        negative_words = ['attack', 'war', 'conflict', 'crisis', 'threat', 'tension', 
+                         'military', 'strike', 'bomb', 'missile', 'sanction', 'blockade',
+                         'closure', 'shut', 'disruption', 'risk', 'danger']
+        
+        # Positive keywords
+        positive_words = ['peace', 'agreement', 'deal', 'cooperation', 'stable', 
+                         'normal', 'open', 'safe', 'secure', 'diplomatic']
+        
+        neg_count = sum(1 for word in negative_words if word in text_lower)
+        pos_count = sum(1 for word in positive_words if word in text_lower)
+        
+        # Calculate sentiment score (-1 to 1)
+        total = neg_count + pos_count
+        if total == 0:
+            sentiment_score = 0.0
+        else:
+            sentiment_score = (pos_count - neg_count) / total
+        
+        # Determine risk level
+        if neg_count >= 5:
+            risk_level = 'high'
+        elif neg_count >= 2:
+            risk_level = 'medium'
+        else:
+            risk_level = 'low'
+        
+        return {
+            'sentiment_score': sentiment_score,
+            'risk_level': risk_level,
+            'confidence': 0.6,  # Lower confidence for rule-based
+            'key_factors': [f'negative_words:{neg_count}', f'positive_words:{pos_count}'],
+            'used_full_article': False,
+            'article_length': len(text),
+            'method': 'rule-based'
+        }
         if self.fetch_full_articles and url:
             print(f"    → Fetching full article: {url[:60]}...")
             full_article = self.article_fetcher.fetch_article(url)
@@ -546,8 +605,8 @@ class EnhancedNewsSentimentAnalyzer:
         print(f"Full article fetching: {self.fetch_full_articles}")
         print(f"{'='*60}\n")
         
-        # Fetch articles from NewsAPI
-        articles_df = self.fetch_newsapi_articles(start_date, end_date, keywords)
+        # Fetch articles from GDELT
+        articles_df = self.fetch_gdelt_articles(start_date, end_date, keywords)
         
         if len(articles_df) == 0:
             print("⚠ No articles found")
@@ -574,7 +633,7 @@ class EnhancedNewsSentimentAnalyzer:
                 'key_factors': ', '.join(analysis.get('key_factors', [])[:5]),
                 'used_full_article': analysis.get('used_full_article', False),
                 'article_length': analysis.get('article_length', 0),
-                'source': 'NewsAPI-LLM'
+                'source': 'GDELT-OpenAI'
             })
         
         result_df = pd.DataFrame(analyzed)
@@ -614,10 +673,9 @@ class EnhancedNewsSentimentAnalyzer:
 
 if __name__ == "__main__":
     # Quick test
-    print("Testing Enhanced News Sentiment Analyzer with LLM...\n")
+    print("Testing GDELT + OpenAI News Sentiment Analyzer...\n")
     
     analyzer = EnhancedNewsSentimentAnalyzer(
-        llm_provider='openai',  # Using OpenAI by default
         fetch_full_articles=True
     )
     
