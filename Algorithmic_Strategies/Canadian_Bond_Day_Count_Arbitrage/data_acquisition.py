@@ -15,11 +15,11 @@ from pathlib import Path
 
 # Optional imports (handle gracefully if not available)
 try:
-    from blpapi import Session, SessionOptions, Request
-    BLOOMBERG_AVAILABLE = True
+    import databento as db
+    DATABENTO_AVAILABLE = True
 except ImportError:
-    BLOOMBERG_AVAILABLE = False
-    logging.warning("Bloomberg API not available. Using alternative data sources.")
+    DATABENTO_AVAILABLE = False
+    logging.warning("Databento API not available.")
 
 try:
     import requests
@@ -92,6 +92,21 @@ class CanadianBondDataAcquisition:
             self.logger.error(f"Bloomberg initialization failed: {e}")
             self.bb_session = None
     
+    def _init_databento(self):
+        """Initialize Databento API client."""
+        try:
+            import os
+            api_key = os.getenv('DATABENTO_API_KEY')
+            if not api_key:
+                raise ValueError("DATABENTO_API_KEY environment variable not set")
+            
+            self.db_client = db.Historical(api_key)
+            self.logger.info("Databento client initialized successfully")
+            return True
+        except Exception as e:
+            self.logger.error(f"Databento initialization failed: {e}")
+            return False
+    
     def get_canadian_government_bonds(self, as_of_date: Optional[datetime] = None) -> pd.DataFrame:
         """
         Retrieve universe of Canadian Government bonds.
@@ -107,8 +122,8 @@ class CanadianBondDataAcquisition:
         
         self.logger.info(f"Fetching Canadian Government bonds as of {as_of_date}")
         
-        if self.data_source == "bloomberg" and BLOOMBERG_AVAILABLE and self.bb_session:
-            return self._get_bonds_from_bloomberg(as_of_date)
+        if self.data_source == "databento" and DATABENTO_AVAILABLE:
+            return self._get_bonds_from_databento(as_of_date)
         else:
             return self._get_bonds_from_bank_of_canada(as_of_date)
     
@@ -148,6 +163,57 @@ class CanadianBondDataAcquisition:
             
         except Exception as e:
             self.logger.error(f"Bloomberg bond fetch failed: {e}")
+            return pd.DataFrame()
+    
+    def _get_bonds_from_databento(self, as_of_date: datetime) -> pd.DataFrame:
+        """
+        Fetch Canadian Government bond futures data from Databento.
+        
+        Retrieves CGB (Canadian Government Bond) futures contracts.
+        """
+        if not DATABENTO_AVAILABLE:
+            self.logger.error("Databento not available")
+            return pd.DataFrame()
+        
+        self.logger.info("Fetching bonds from Databento")
+        
+        try:
+            if not self._init_databento():
+                return pd.DataFrame()
+            
+            # Fetch CGB futures data
+            symbols = self.config['data_sources']['primary'].get('symbols', 'CGB*')
+            
+            # Query historical data for the date
+            data = self.db_client.timeseries(
+                dataset='XCAN.ITCH',
+                symbols=symbols,
+                start=as_of_date.strftime('%Y-%m-%d'),
+                end=as_of_date.strftime('%Y-%m-%d'),
+                schema='ohlcv'
+            )
+            
+            # Convert to DataFrame
+            df = data.to_pandas()
+            
+            # Extract unique contracts
+            if len(df) > 0:
+                bonds = df.groupby('symbol').agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min',
+                    'close': 'last',
+                    'volume': 'sum'
+                }).reset_index()
+                
+                self.logger.info(f"Retrieved {len(bonds)} CGB contracts from Databento")
+                return bonds
+            else:
+                self.logger.warning(f"No data found for {as_of_date}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            self.logger.error(f"Databento fetch failed: {e}")
             return pd.DataFrame()
     
     def _get_bonds_from_bank_of_canada(self, as_of_date: datetime) -> pd.DataFrame:
@@ -202,8 +268,8 @@ class CanadianBondDataAcquisition:
         
         self.logger.info(f"Fetching details for {len(bond_identifiers)} bonds")
         
-        if self.data_source == "bloomberg" and BLOOMBERG_AVAILABLE and self.bb_session:
-            return self._get_bond_details_bloomberg(bond_identifiers, as_of_date)
+        if self.data_source == "databento" and DATABENTO_AVAILABLE:
+            return self._get_bond_details_databento(bond_identifiers, as_of_date)
         else:
             return self._get_bond_details_alternative(bond_identifiers, as_of_date)
     
@@ -285,6 +351,61 @@ class CanadianBondDataAcquisition:
             'PREV_CPN_DT': pd.NaT,
             'CPN': np.nan
         })
+    def _get_bond_details_databento(self, identifiers: List[str],
+                                   as_of_date: datetime) -> pd.DataFrame:
+        """Fetch detailed bond data from Databento."""
+        if not DATABENTO_AVAILABLE:
+            self.logger.error("Databento not available")
+            return pd.DataFrame()
+
+        try:
+            if not self._init_databento():
+                return pd.DataFrame()
+
+            # Fetch tick data for each symbol
+            all_data = []
+
+            for symbol in identifiers:
+                try:
+                    data = self.db_client.timeseries(
+                        dataset='XCAN.ITCH',
+                        symbols=symbol,
+                        start=as_of_date.strftime('%Y-%m-%d'),
+                        end=as_of_date.strftime('%Y-%m-%d'),
+                        schema='trades'
+                    )
+
+                    df = data.to_pandas()
+                    if len(df) > 0:
+                        # Aggregate to get OHLCV
+                        agg_data = {
+                            'symbol': symbol,
+                            'open': df['price'].iloc[0],
+                            'high': df['price'].max(),
+                            'low': df['price'].min(),
+                            'close': df['price'].iloc[-1],
+                            'volume': df['size'].sum(),
+                            'bid': df.get('bid', np.nan).iloc[-1] if 'bid' in df else np.nan,
+                            'ask': df.get('ask', np.nan).iloc[-1] if 'ask' in df else np.nan,
+                        }
+                        all_data.append(agg_data)
+
+                except Exception as e:
+                    self.logger.warning(f"Failed to fetch data for {symbol}: {e}")
+                    continue
+
+            if all_data:
+                df = pd.DataFrame(all_data)
+                self.logger.info(f"Retrieved details for {len(df)} bonds from Databento")
+                return df
+            else:
+                return pd.DataFrame()
+
+        except Exception as e:
+            self.logger.error(f"Databento bond details fetch failed: {e}")
+            return pd.DataFrame()
+
+
     
     def get_coupon_schedule(self, bond_identifier: str) -> pd.DataFrame:
         """
