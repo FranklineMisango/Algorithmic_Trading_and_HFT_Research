@@ -29,7 +29,152 @@ class CongressionalDataAcquisition:
         self.config = config
         self.start_date = config['data']['start_date']
         self.end_date = config['data']['end_date']
-        self.api_key = os.getenv(config['data_sources']['congressional_trades'].get('api_key_env', ''))
+        self.congressional_source = config['data_sources']['congressional_trades']
+        self.api_key = os.getenv(self.congressional_source.get('api_key_env', ''))
+
+    def _parse_amount(self, value) -> float:
+        """Parse amount fields that may be numeric or range strings."""
+        if pd.isna(value):
+            return np.nan
+
+        if isinstance(value, (int, float, np.number)):
+            return float(value)
+
+        text = str(value).strip()
+        if not text:
+            return np.nan
+
+        # Handles ranges such as "$1,001 - $15,000" by taking the midpoint.
+        cleaned = text.replace('$', '').replace(',', '')
+        if '-' in cleaned:
+            parts = [p.strip() for p in cleaned.split('-') if p.strip()]
+            if len(parts) == 2:
+                try:
+                    low = float(parts[0])
+                    high = float(parts[1])
+                    return (low + high) / 2.0
+                except ValueError:
+                    return np.nan
+
+        try:
+            return float(cleaned)
+        except ValueError:
+            return np.nan
+
+    def _standardize_congressional_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Map common source column names to the internal schema."""
+        column_aliases = {
+            'filing_date': ['filing_date', 'disclosure_date', 'reported_date', 'filed_date'],
+            'transaction_date': ['transaction_date', 'trade_date', 'transactionDate'],
+            'politician': ['politician', 'representative', 'member', 'name'],
+            'party': ['party', 'politician_party'],
+            'committee': ['committee', 'committees'],
+            'ticker': ['ticker', 'symbol', 'stock', 'asset_ticker'],
+            'transaction_type': ['transaction_type', 'type', 'transaction', 'tx_type'],
+            'amount': ['amount', 'amount_usd', 'value', 'transaction_amount', 'range'],
+        }
+
+        normalized_map = {str(col).strip().lower(): col for col in df.columns}
+        standardized = pd.DataFrame(index=df.index)
+
+        for target_col, aliases in column_aliases.items():
+            source_col = None
+            for alias in aliases:
+                candidate = normalized_map.get(alias.lower())
+                if candidate is not None:
+                    source_col = candidate
+                    break
+            if source_col is not None:
+                standardized[target_col] = df[source_col]
+
+        if 'filing_date' not in standardized.columns:
+            raise ValueError(
+                "Congressional trades file is missing a filing date column. "
+                "Expected one of: filing_date, disclosure_date, reported_date, filed_date."
+            )
+
+        if 'transaction_date' not in standardized.columns:
+            standardized['transaction_date'] = standardized['filing_date']
+
+        if 'politician' not in standardized.columns:
+            standardized['politician'] = 'Unknown'
+        if 'party' not in standardized.columns:
+            standardized['party'] = 'Unknown'
+        if 'committee' not in standardized.columns:
+            standardized['committee'] = 'Unknown'
+        if 'transaction_type' not in standardized.columns:
+            standardized['transaction_type'] = 'buy'
+        if 'amount' not in standardized.columns:
+            standardized['amount'] = np.nan
+
+        if 'ticker' not in standardized.columns:
+            raise ValueError(
+                "Congressional trades file is missing ticker/symbol column. "
+                "Expected one of: ticker, symbol, stock, asset_ticker."
+            )
+
+        standardized['amount'] = standardized['amount'].apply(self._parse_amount)
+        standardized['ticker'] = standardized['ticker'].astype(str).str.upper().str.strip()
+
+        return standardized
+
+    def fetch_congressional_trades_from_csv(self, csv_path: str) -> pd.DataFrame:
+        """Load Congressional trades from a local CSV export."""
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"Congressional trades CSV not found: {csv_path}")
+
+        print(f"Loading Congressional trades from CSV: {csv_path}")
+        raw_df = pd.read_csv(csv_path)
+        trades_df = self._standardize_congressional_columns(raw_df)
+
+        trades_df['filing_date'] = pd.to_datetime(trades_df['filing_date'], errors='coerce')
+        trades_df['transaction_date'] = pd.to_datetime(trades_df['transaction_date'], errors='coerce')
+
+        # Keep only rows in configured backtest window.
+        start_dt = pd.to_datetime(self.start_date)
+        end_dt = pd.to_datetime(self.end_date)
+        trades_df = trades_df[
+            (trades_df['filing_date'] >= start_dt) &
+            (trades_df['filing_date'] <= end_dt)
+        ].copy()
+
+        trades_df = trades_df.sort_values('filing_date').reset_index(drop=True)
+        print(f"Loaded {len(trades_df)} Congressional trades from CSV")
+
+        return trades_df
+
+    def fetch_congressional_trades(self) -> pd.DataFrame:
+        """Fetch Congressional trades using configured provider and fallbacks."""
+        provider = str(self.congressional_source.get('provider', 'sample')).lower()
+        csv_path = self.congressional_source.get('csv_path', 'data/quiver_congress_trades.csv')
+        allow_sample_fallback = self.congressional_source.get('allow_sample_fallback', True)
+
+        if provider in ('quiver', 'quiver_quantitative'):
+            if self.api_key:
+                print("Quiver API key detected, but API client is not implemented yet.")
+                print("Trying local CSV export path as fallback...")
+            else:
+                print("No Quiver API key detected (common on free plan).")
+                print("Trying local CSV export from Quiver web data...")
+
+            if os.path.exists(csv_path):
+                return self.fetch_congressional_trades_from_csv(csv_path)
+
+            print(f"CSV not found at {csv_path}")
+            if allow_sample_fallback:
+                print("Falling back to synthetic sample data.")
+                return self.fetch_congressional_trades_sample()
+
+            raise FileNotFoundError(
+                "No Quiver API key and CSV file not found. "
+                "Export Quiver trades to CSV and set data_sources.congressional_trades.csv_path."
+            )
+
+        if provider == 'csv':
+            return self.fetch_congressional_trades_from_csv(csv_path)
+
+        print(f"Unknown provider '{provider}'. Using synthetic sample data.")
+        return self.fetch_congressional_trades_sample()
         
     def fetch_congressional_trades_sample(self) -> pd.DataFrame:
         """
@@ -81,7 +226,7 @@ class CongressionalDataAcquisition:
         trades = []
         for _ in range(n_trades):
             # Random transaction date
-            trans_date = np.random.choice(date_range)
+            trans_date = pd.Timestamp(np.random.choice(date_range))
             
             # Filing date is 1-45 days after transaction
             filing_delay = np.random.randint(1, 46)
@@ -278,7 +423,7 @@ class CongressionalDataAcquisition:
             Tuple of (congressional_trades, prices, volumes, market_caps, volatility)
         """
         # Fetch Congressional trades
-        congressional_trades = self.fetch_congressional_trades_sample()
+        congressional_trades = self.fetch_congressional_trades()
         congressional_trades = self.clean_congressional_data(congressional_trades)
         
         # Get unique tickers

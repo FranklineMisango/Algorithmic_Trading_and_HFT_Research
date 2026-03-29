@@ -29,6 +29,9 @@ pyyaml>=6.0
 requests>=2.31.0
 tqdm>=4.65.0
 python-dotenv>=1.0.0
+selenium>=4.19.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
 
 # Jupyter
 jupyter>=1.0.0
