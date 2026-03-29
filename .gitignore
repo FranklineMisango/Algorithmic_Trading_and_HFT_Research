@@ -8,6 +8,11 @@
 *.synctex.gz
 *.dvi
 *.ps
+*.bbl
+*.sty
+*.blg
+*.cls
+
 
 #block every paper folder inside
 **/paper/**
@@ -104,3 +109,7 @@ config.json
 
 #Lean Backtester whole folder
 /LeanBacktester/
+
+# Ignore all YAML files
+*.yaml
+*.yml
