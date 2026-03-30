@@ -1,0 +1,114 @@
+%% Arithmax Research Paper Template
+%% Use this template for new research papers
+
+% Choose your document style:
+% For IEEE-style two-column: \documentclass[twocolumn,ieee]{arithmaxresearch}
+% For IEEE-style one-column: \documentclass[onecolumn,ieee]{arithmaxresearch}
+% For article-style: \documentclass[article]{arithmaxresearch}
+
+\documentclass[twocolumn,ieee]{arithmaxresearch}
+
+\begin{document}
+
+% Title with Arithmax branding
+\title{Your Research Paper Title Here: \\
+A Comprehensive Analysis with Mathematical Rigor}
+
+% Author information using the standardized format
+\arithmaxauthor{Author Name}{Affiliation/Department}{email@arithmax.com}
+
+% Add the title and author info
+\maketitle
+
+% Add the official Arithmax Research logo prominently on the title page
+\begin{center}
+\vspace{-1em}
+\arithmaxtitlelogo[4cm]
+\vspace{0.5em}
+\end{center}
+
+\begin{abstract}
+Your abstract goes here. This template provides consistent formatting, branding, and mathematical notation for all Arithmax Research publications. The abstract should clearly state the problem, methodology, key findings, and contributions.
+\end{abstract}
+
+\section{Introduction}
+
+This template demonstrates the unified LaTeX format for Arithmax Research papers with the official logo. Key features include:
+
+\begin{itemize}
+    \item Official Arithmax Research logo integration
+    \item Consistent branding with professional appearance
+    \item Standardized mathematical notation
+    \item Professional formatting for both IEEE and article styles
+    \item Unified color scheme matching the logo
+    \item Built-in support for algorithms, theorems, and financial mathematics
+\end{itemize}
+
+The logo can be used in various contexts:
+\begin{itemize}
+    \item Title page: \texttt{\textbackslash arithmaxtitlelogo[4cm]}
+    \item Headers: \texttt{\textbackslash arithmaxheaderlogo[1.2cm]} (automatic)
+    \item Inline text: \arithmaxinlinelogo[0.6cm] using \texttt{\textbackslash arithmaxinlinelogo}
+    \item Scaled versions: \texttt{\textbackslash arithmaxlogoscaled[3cm]}
+\end{itemize}
+
+\section{Mathematical Framework}
+
+The template includes common mathematical notation:
+\begin{itemize}
+    \item Real numbers: $\R$
+    \item Expectation: $\E[X]$
+    \item Probability: $\Prob(A)$
+    \item Variance: $\Var(X)$
+    \item Price notation: $\price{t}$
+    \item Returns: $\return{t}$
+    \item Volatility: $\vol{t}$
+\end{itemize}
+
+\begin{theorem}
+This is an example theorem using the standardized formatting with Arithmax Research branding.
+\end{theorem}
+
+\begin{proof}
+Proof content goes here with consistent mathematical notation.
+\end{proof}
+
+\section{Logo Usage Examples}
+
+Here are different ways to incorporate the Arithmax Research logo:
+
+\subsection{Different Sizes}
+\begin{itemize}
+    \item Small inline: \arithmaxinlinelogo[0.5cm] for text integration
+    \item Medium: \arithmaxlogoscaled[2cm] for section headers
+    \item Large: \arithmaxtitlelogo[3cm] for emphasis
+\end{itemize}
+
+\section{Algorithms}
+
+\begin{algorithm}
+\caption{Sample Algorithm with Arithmax Branding}
+\begin{algorithmic}[1]
+\STATE Initialize parameters
+\FOR{each iteration}
+    \STATE Perform calculation
+    \STATE Update variables
+\ENDFOR
+\RETURN result
+\end{algorithmic}
+\end{algorithm}
+
+\section{Results and Discussion}
+
+Your results section with consistent formatting, mathematical notation, and professional Arithmax Research branding throughout.
+
+\section{Conclusion}
+
+Summarize your findings and contributions. The template ensures all research maintains the professional Arithmax Research appearance.
+
+\begin{thebibliography}{9}
+\bibitem{sample}
+A. Author, ``Sample Reference,'' \emph{Journal Name}, vol. 1, no. 1, pp. 1-10, 2025.
+\end{thebibliography}
+
+\end{document}
