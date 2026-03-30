@@ -23,14 +23,32 @@ class CongressBacktester:
         """
         self.config = config
         self.initial_capital = config['backtest']['initial_capital']
-        self.commission = config['transaction_costs']['commission']
-        self.slippage_bps = config['transaction_costs']['slippage_bps']
+
+        # Backward-compatible transaction cost parsing.
+        # Supports either legacy `transaction_costs` or current `costs` schema.
+        if 'transaction_costs' in config:
+            tx_cfg = config['transaction_costs']
+            self.commission = float(tx_cfg.get('commission', 0.0005))
+            slippage_value = tx_cfg.get('slippage_bps', [5, 10])
+            if isinstance(slippage_value, (int, float)):
+                self.slippage_bps = [float(slippage_value)]
+            else:
+                self.slippage_bps = [float(x) for x in slippage_value]
+        else:
+            costs_cfg = config.get('costs', {})
+            commission_bps = float(costs_cfg.get('commission_bps', 5.0))
+            self.commission = commission_bps / 10000.0
+            self.slippage_bps = [
+                float(costs_cfg.get('slippage_large_cap_bps', 5.0)),
+                float(costs_cfg.get('slippage_small_cap_bps', 10.0)),
+            ]
+
         self.rebalance_freq = config['portfolio']['rebalance_frequency']
         
         # Risk management
         self.max_drawdown_limit = config['risk']['max_drawdown']
         self.position_stop_loss = config['risk']['position_stop_loss']
-        self.portfolio_stop_loss = config['risk']['portfolio_stop_loss']
+        self.portfolio_stop_loss = config['risk'].get('portfolio_stop_loss', config['risk']['max_drawdown'])
         
     def calculate_transaction_costs(self,
                                    turnover: float,
@@ -86,12 +104,15 @@ class CongressBacktester:
             position_value = 0.0
             for ticker, shares in positions.items():
                 if ticker in prices.columns:
-                    position_value += shares * prices.loc[date, ticker]
+                    price = prices.loc[date, ticker]
+                    # Skip NaN prices when valuing positions
+                    if pd.notna(price):
+                        position_value += shares * price
             
             portfolio_value = cash + position_value
             
             # Check for rebalance
-            if date in rebalance_dates:
+            if date in rebalance_dates and pd.notna(portfolio_value):
                 target_weights = portfolio_history[date]
                 
                 # Calculate turnover
@@ -99,16 +120,21 @@ class CongressBacktester:
                     current_weights = pd.Series(0.0, index=target_weights.index)
                     for ticker in target_weights.index:
                         if ticker in positions and ticker in prices.columns:
-                            current_weights[ticker] = (
-                                positions.get(ticker, 0) * prices.loc[date, ticker] / portfolio_value
-                            )
+                            price = prices.loc[date, ticker]
+                            # Only update weights if price is valid
+                            if pd.notna(price) and price > 0:
+                                current_weights[ticker] = (
+                                    positions.get(ticker, 0) * price / portfolio_value
+                                )
                     
                     turnover = (current_weights - target_weights).abs().sum() / 2.0
                 else:
                     turnover = 1.0  # First rebalance is full turnover
                 
-                # Transaction costs
+                # Transaction costs - ensure they're valid
                 transaction_cost = self.calculate_transaction_costs(turnover, portfolio_value)
+                if pd.isna(transaction_cost) or transaction_cost < 0:
+                    transaction_cost = 0.0
                 cash -= transaction_cost
                 portfolio_value -= transaction_cost
                 
@@ -118,14 +144,18 @@ class CongressBacktester:
                     if ticker in prices.columns:
                         target_value = weight * portfolio_value
                         price = prices.loc[date, ticker]
+                        # Skip symbols with missing/invalid prices or invalid target values on rebalance day.
+                        if pd.isna(price) or price <= 0 or pd.isna(target_value) or target_value <= 0:
+                            continue
                         shares = int(target_value / price)
-                        new_positions[ticker] = shares
+                        if shares > 0:
+                            new_positions[ticker] = shares
                 
                 # Update cash
                 new_position_value = sum(
                     shares * prices.loc[date, ticker]
                     for ticker, shares in new_positions.items()
-                    if ticker in prices.columns
+                    if ticker in prices.columns and pd.notna(prices.loc[date, ticker])
                 )
                 cash = portfolio_value - new_position_value
                 positions = new_positions
@@ -151,7 +181,7 @@ class CongressBacktester:
             position_value = sum(
                 shares * prices.loc[date, ticker]
                 for ticker, shares in positions.items()
-                if ticker in prices.columns
+                if ticker in prices.columns and pd.notna(prices.loc[date, ticker])
             )
             portfolio_value = cash + position_value
             
@@ -201,7 +231,7 @@ class CongressBacktester:
         volatility = returns.std() * np.sqrt(trading_days_per_year)
         
         # Sharpe ratio
-        risk_free_rate = self.config['backtest']['risk_free_rate']
+        risk_free_rate = self.config['backtest'].get('risk_free_rate', 0.02)
         excess_returns = returns - risk_free_rate / trading_days_per_year
         sharpe_ratio = excess_returns.mean() / returns.std() * np.sqrt(trading_days_per_year)
         
