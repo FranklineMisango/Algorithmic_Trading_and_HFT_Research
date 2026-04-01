@@ -7,11 +7,17 @@ Fetches cryptocurrency prices, stablecoin market caps, treasury yields, and VIX 
 import pandas as pd
 import numpy as np
 import yaml
+import os
 import warnings
 warnings.filterwarnings('ignore')
 
 from typing import Dict, Optional
 from datetime import datetime, timedelta
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
 try:
     import yfinance as yf
@@ -34,15 +40,20 @@ class DataAcquisition:
     
     def __init__(self, config_path: str = "config.yaml"):
         """Initialize with configuration."""
+        if load_dotenv is not None:
+            load_dotenv()
+
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
         self.start_date = self.config['data']['start_date']
         self.end_date = self.config['data']['end_date']
+        self.binance_api_key = os.getenv('BINANCE_API_KEY')
+        self.fred_api_key = os.getenv('FRED_API_KEY')
     
     def fetch_crypto_prices(self) -> pd.DataFrame:
         """
-        Fetch Bitcoin and Ethereum prices from Yahoo Finance.
+        Fetch Bitcoin and Ethereum prices from Binance (fallback: Yahoo Finance).
         
         Returns:
             DataFrame with BTC-USD and ETH-USD prices
@@ -55,21 +66,26 @@ class DataAcquisition:
             print(f"Fetching {symbol}...")
             
             try:
-                data = yf.download(
-                    symbol,
-                    start=self.start_date,
-                    end=self.end_date,
-                    progress=False
-                )
-                
-                if not data.empty:
-                    prices[symbol] = data['Adj Close']
+                series = self._fetch_symbol_price_series(symbol)
+                if series is not None and not series.empty:
+                    prices[symbol] = series
+                else:
+                    print(f"Warning: No close price column found for {symbol}. Using placeholder data.")
+                    prices[symbol] = self._generate_placeholder_asset_price(symbol)
             
             except Exception as e:
                 print(f"Error fetching {symbol}: {e}")
+                print(f"Generating placeholder data for {symbol}...")
+                prices[symbol] = self._generate_placeholder_asset_price(symbol)
         
         # Combine into single DataFrame
+        if not prices:
+            # Ensure downstream alignment always has a valid date index.
+            for symbol in symbols:
+                prices[symbol] = self._generate_placeholder_asset_price(symbol)
+
         df = pd.DataFrame(prices)
+        df = df.sort_index()
         df = df.ffill()  # Forward fill missing values
         
         print(f"Fetched crypto prices: {len(df)} days")
@@ -86,7 +102,11 @@ class DataAcquisition:
             Series with daily treasury yields
         """
         try:
-            fred = Fred(api_key=api_key)
+            if 'Fred' not in globals():
+                raise ImportError("fredapi is not installed")
+
+            resolved_api_key = api_key or self.fred_api_key
+            fred = Fred(api_key=resolved_api_key)
             
             print("Fetching US 2-Year Treasury Yield (DGS2)...")
             
@@ -125,7 +145,9 @@ class DataAcquisition:
                 progress=False
             )
             
-            vix = data['Adj Close']
+            vix = self._extract_close_series(data, '^VIX')
+            if vix is None or vix.empty:
+                raise ValueError("No close price column found for ^VIX")
             vix = vix.ffill()
             
             print(f"Fetched VIX: {len(vix)} days")
@@ -207,6 +229,9 @@ class DataAcquisition:
         # Fetch institutional events
         events = self.fetch_institutional_events()
         
+        if crypto_prices.empty:
+            raise ValueError("Crypto prices are empty after fetch and fallback.")
+
         # Align all data to common index (crypto prices dates)
         aligned_data = pd.DataFrame(index=crypto_prices.index)
         
@@ -238,7 +263,162 @@ class DataAcquisition:
             'events': events
         }
     
+    def _extract_close_series(self, data: pd.DataFrame, symbol: str) -> Optional[pd.Series]:
+        """Extract adjusted/regular close from yfinance output across column formats."""
+        if data is None or data.empty:
+            return None
+
+        preferred_fields = ('Adj Close', 'Close')
+
+        if isinstance(data.columns, pd.MultiIndex):
+            level0 = data.columns.get_level_values(0)
+            for field in preferred_fields:
+                if field in level0:
+                    subset = data[field]
+                    if isinstance(subset, pd.DataFrame):
+                        if symbol in subset.columns:
+                            series = subset[symbol]
+                        else:
+                            series = subset.iloc[:, 0]
+                    else:
+                        series = subset
+                    return pd.to_numeric(series, errors='coerce').rename(symbol)
+            return None
+
+        for field in preferred_fields:
+            if field in data.columns:
+                return pd.to_numeric(data[field], errors='coerce').rename(symbol)
+
+        if len(data.columns) == 1:
+            return pd.to_numeric(data.iloc[:, 0], errors='coerce').rename(symbol)
+
+        return None
+
+    def _fetch_symbol_price_series(self, symbol: str) -> Optional[pd.Series]:
+        """Fetch symbol close series from Binance first, then fallback to Yahoo Finance."""
+        pair = self._to_binance_pair(symbol)
+
+        if pair is not None:
+            binance_series = self._fetch_binance_daily_close(pair, symbol)
+            if binance_series is not None and not binance_series.empty:
+                return binance_series
+
+        data = yf.download(
+            symbol,
+            start=self.start_date,
+            end=self.end_date,
+            progress=False
+        )
+        return self._extract_close_series(data, symbol)
+
+    def _to_binance_pair(self, symbol: str) -> Optional[str]:
+        """Map project symbols to Binance spot pairs."""
+        mapping = {
+            'BTC-USD': 'BTCUSDT',
+            'ETH-USD': 'ETHUSDT',
+            'BTC-USDT': 'BTCUSDT',
+            'ETH-USDT': 'ETHUSDT',
+        }
+        return mapping.get(symbol)
+
+    def _fetch_binance_daily_close(self, pair: str, output_name: str) -> Optional[pd.Series]:
+        """Fetch daily close prices from Binance klines endpoint with pagination."""
+        if 'requests' not in globals():
+            return None
+
+        print(f"Fetching {output_name} from Binance ({pair})...")
+
+        base_url = 'https://api.binance.com/api/v3/klines'
+        start_ts = int(pd.Timestamp(self.start_date, tz='UTC').timestamp() * 1000)
+        end_ts = int((pd.Timestamp(self.end_date, tz='UTC') + pd.Timedelta(days=1)).timestamp() * 1000) - 1
+
+        all_rows = []
+        cursor = start_ts
+        headers = {'X-MBX-APIKEY': self.binance_api_key} if self.binance_api_key else {}
+
+        while cursor <= end_ts:
+            params = {
+                'symbol': pair,
+                'interval': '1d',
+                'startTime': cursor,
+                'endTime': end_ts,
+                'limit': 1000,
+            }
+
+            response = requests.get(base_url, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
+            rows = response.json()
+
+            if not rows:
+                break
+
+            all_rows.extend(rows)
+            last_open_time = int(rows[-1][0])
+            next_cursor = last_open_time + 86_400_000
+
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+
+            if len(rows) < 1000:
+                break
+
+        if not all_rows:
+            return None
+
+        df = pd.DataFrame(all_rows)
+        series = pd.to_numeric(df[4], errors='coerce')
+        index = pd.to_datetime(df[0].astype('int64'), unit='ms', utc=True).tz_localize(None)
+        series.index = index
+        series.name = output_name
+
+        return series.sort_index()
+
     # Placeholder data generators (for testing without API keys)
+
+    def _generate_placeholder_asset_price(self, symbol: str) -> pd.Series:
+        """Generate synthetic daily price path for BTC/ETH when market data is unavailable."""
+        dates = pd.date_range(self.start_date, self.end_date, freq='D')
+
+        seed_map = {
+            'BTC-USD': 101,
+            'ETH-USD': 102,
+        }
+        start_map = {
+            'BTC-USD': 9000.0,
+            'ETH-USD': 700.0,
+        }
+        drift_map = {
+            'BTC-USD': 0.00045,
+            'ETH-USD': 0.00055,
+        }
+        vol_map = {
+            'BTC-USD': 0.035,
+            'ETH-USD': 0.045,
+        }
+
+        np.random.seed(seed_map.get(symbol, 199))
+        n = len(dates)
+        drift = drift_map.get(symbol, 0.0004)
+        vol = vol_map.get(symbol, 0.03)
+        log_returns = drift + np.random.normal(0, vol, n)
+
+        price = np.empty(n)
+        price[0] = start_map.get(symbol, 1000.0)
+        for i in range(1, n):
+            price[i] = max(price[i - 1] * np.exp(log_returns[i]), 1.0)
+
+        # Inject known drawdown windows so stress tests remain informative.
+        dates_index = pd.DatetimeIndex(dates)
+        covid_mask = (dates_index >= '2020-03-01') & (dates_index <= '2020-03-31')
+        bear_2022_mask = (dates_index >= '2022-01-01') & (dates_index <= '2022-12-31')
+        ftx_mask = (dates_index >= '2022-11-01') & (dates_index <= '2022-11-30')
+
+        price[covid_mask] *= 0.78
+        price[bear_2022_mask] *= 0.70
+        price[ftx_mask] *= 0.82
+
+        return pd.Series(price, index=dates, name=symbol)
     
     def _generate_placeholder_treasury(self) -> pd.Series:
         """Generate synthetic treasury yield data."""
