@@ -7,7 +7,7 @@ Vectorized backtest with transaction costs, position sizing, and leverage rules.
 import pandas as pd
 import numpy as np
 import yaml
-from typing import Dict
+from typing import Dict, List
 import warnings
 warnings.filterwarnings('ignore')
 

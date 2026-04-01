@@ -65,7 +65,9 @@ Risk_Premium = Growth(Stablecoin Market Cap) / Growth(Total Crypto Market Cap)
 ```
 
 **Measurement:**
-- Stablecoin basket: USDT, USDC, BUSD, DAI
+- Stablecoin basket: USDT ($145B), USDC ($35B), DAI ($5B) — real data only
+  - BUSD delisted (phased out by Binance Dec 2023)
+  - Together represent ~99% of active stablecoin liquidity
 - Total crypto market cap excludes stablecoins initially
 
 **Parameters:**
@@ -390,19 +392,21 @@ Impact = 0.20% per $1M traded
 
 ### Crypto Data
 
-| Data | Source | Frequency | Fields |
-|------|--------|-----------|--------|
-| **Bitcoin Price** | Yahoo Finance | Daily | BTC-USD Close |
-| **Ethereum Price** | Yahoo Finance | Daily | ETH-USD Close |
-| **Total Crypto Market Cap** | CoinMarketCap API | Daily | Total Market Cap |
-| **Stablecoin Market Caps** | CoinMarketCap API | Daily | USDT, USDC, BUSD, DAI |
+| Data | Source | Frequency | Fields | Auth |
+|------|--------|-----------|--------|------|
+| **Bitcoin Price** | Binance API | Daily | BTCUSDT Close | None |
+| **Ethereum Price** | Binance API | Daily | ETHUSDT Close | None |
+| **Total Crypto Market Cap** | Kraken OHLC | Daily | BTC+ETH Proxy | None |
+| **USDT Market Cap** | Kraken OHLC | Daily | USDTZUSD Close × $131B | None |
+| **USDC Market Cap** | Kraken OHLC | Daily | USDCUSD Close × $35B | None |
+| **DAI Market Cap** | Bybit API | Daily | DAIUSDT Close × $5B | None |
 
 ### Traditional Finance Data
 
-| Data | Source | Frequency | Fields |
-|------|--------|-----------|--------|
-| **US 2-Year Treasury Yield** | FRED (DGS2) | Daily | Yield (%) |
-| **VIX Index** | Yahoo Finance | Daily | ^VIX Close |
+| Data | Source | Frequency | Fields | Auth |
+|------|--------|-----------|--------|------|
+| **US 2-Year Treasury Yield** | FRED API (DGS2) | Daily | Yield (%) | FRED_API_KEY |
+| **VIX Index** | Yahoo Finance | Daily | ^VIX Close | None |
 
 ### Event Data
 
@@ -474,8 +478,8 @@ features_winsorized = features_lagged.clip(
 
 ### Phase 1: Data Acquisition
 - [ ] Set up FRED API for treasury yields
-- [ ] Fetch BTC/ETH prices from yfinance
-- [ ] CoinMarketCap API integration (or scraping)
+- [ ] Fetch BTC/ETH prices from Binance (fallback: yfinance)
+- [ ] Fetch stablecoin basket from Kraken/Bybit (USDT, USDC, DAI)
 - [ ] Manual event calendar creation
 
 ### Phase 2: Feature Engineering
@@ -560,8 +564,10 @@ This is a **research prototype** for educational purposes. It is **not investmen
 
 **Data Sources:**
 - Federal Reserve Economic Data (FRED): US Treasury Yields
-- Yahoo Finance: BTC-USD, ETH-USD, VIX
-- CoinMarketCap: Crypto and stablecoin market capitalizations
+- Binance API: BTC/ETH spot prices
+- Kraken OHLC: USDT/USDC market cap proxy + BTC/ETH market cap proxy inputs
+- Bybit API: DAI market cap proxy input
+- Yahoo Finance: VIX (and fallback for crypto prices)
 
 ---
 
