@@ -10,22 +10,31 @@
 
 \begin{document}
 
-% Title with Arithmax branding
-\title{Your Research Paper Title Here: \\
-A Comprehensive Analysis with Mathematical Rigor}
-
-% Author information using the standardized format
-\arithmaxauthor{Author Name}{Affiliation/Department}{email@arithmax.com}
-
-% Add the title and author info
-\maketitle
-
-% Add the official Arithmax Research logo prominently on the title page
+% First page: dedicated title page only
+\begin{titlepage}
+\thispagestyle{empty}
 \begin{center}
-\vspace{-1em}
+\vspace*{2.0cm}
+
+{\LARGE\bfseries\color{arithmaxblue}Your Research Paper Title Here: \\
+A Comprehensive Analysis with Mathematical Rigor\par}
+
+\vspace{1.5cm}
 \arithmaxtitlelogo[4cm]
-\vspace{0.5em}
+
+\vspace{1.5cm}
+{\large\textbf{User Name}\par}
+\vspace{0.4cm}
+{\normalsize\texttt{user@email.com}\par}
+\vspace{0.6cm}
+{\normalsize\today\par}
+
+\vfill
 \end{center}
+\end{titlepage}
+
+% Second page: start paper content immediately
+\setcounter{page}{2}
 
 \begin{abstract}
 Your abstract goes here. This template provides consistent formatting, branding, and mathematical notation for all Arithmax Research publications. The abstract should clearly state the problem, methodology, key findings, and contributions.
