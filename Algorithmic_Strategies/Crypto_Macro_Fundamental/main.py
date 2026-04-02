@@ -33,8 +33,9 @@ class CryptoMacroFundamentalPipeline:
         self.backtester = CryptoBacktester(config_path)
         
         # Create output directory
-        self.output_dir = Path("output")
-        self.output_dir.mkdir(exist_ok=True)
+        results_dir = self.config.get('output', {}).get('results_dir', 'output')
+        self.output_dir = Path(results_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def run_data_pipeline(self) -> dict:
         """
@@ -48,15 +49,26 @@ class CryptoMacroFundamentalPipeline:
         print("="*60)
         
         dataset = self.data_acq.fetch_full_dataset()
+        prices = dataset['prices']
+        events = dataset['events']
+        window_events = events.loc[(events.index >= prices.index.min()) & (events.index <= prices.index.max())]
         
-        print(f"\nData loaded from {dataset['prices'].index[0]} to {dataset['prices'].index[-1]}")
-        print(f"Total days: {len(dataset['prices'])}")
-        print(f"Columns: {list(dataset['prices'].columns)}")
-        print(f"\nInstitutional events: {len(dataset['events'])}")
+        print(f"\nData loaded from {prices.index[0]} to {prices.index[-1]}")
+        print(f"Total days: {len(prices)}")
+        print(f"Columns: {list(prices.columns)}")
+        print(f"\nInstitutional events configured: {len(events)}")
+        print(f"Institutional events in data window: {len(window_events)}")
+        if len(window_events) > 0:
+            print("In-window events:")
+            for idx, row in window_events.iterrows():
+                print(f"  - {idx.date()}: {row['description']} ({row['impact']})")
+        else:
+            print("Warning: No institutional events overlap the current data window.")
         
         # Save to CSV
-        dataset['prices'].to_csv(self.output_dir / "prices.csv")
-        dataset['events'].to_csv(self.output_dir / "events.csv")
+        prices.to_csv(self.output_dir / "prices.csv")
+        events.to_csv(self.output_dir / "events.csv")
+        window_events.to_csv(self.output_dir / "events_in_window.csv")
         print(f"\nData saved to {self.output_dir}/")
         
         return dataset
