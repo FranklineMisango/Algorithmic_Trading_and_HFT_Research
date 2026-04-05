@@ -7,7 +7,7 @@ Implements the 4-factor model: External Macro, Risk Premium, Adoption, and Insti
 import pandas as pd
 import numpy as np
 import yaml
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 
 class FeatureEngineer:
@@ -214,6 +214,96 @@ class FeatureEngineer:
         
         return features_winsorized
     
+    def calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
+        """
+        Calculate Relative Strength Index (RSI).
+        
+        Args:
+            prices: Price series
+            period: RSI period
+        
+        Returns:
+            RSI values (0-100 scale, normalized to 0-1)
+        """
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        
+        rs = gain / (loss + 1e-8)
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Normalize to 0-1
+        rsi_normalized = rsi / 100
+        
+        return rsi_normalized
+    
+    def calculate_macd(
+        self,
+        prices: pd.Series,
+        fast: int = 12,
+        slow: int = 26,
+        signal: int = 9
+    ) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """
+        Calculate MACD (Moving Average Convergence Divergence).
+        
+        Args:
+            prices: Price series
+            fast: Fast EMA period
+            slow: Slow EMA period
+            signal: Signal line period
+        
+        Returns:
+            (macd_line, signal_line, histogram)
+        """
+        ema_fast = prices.ewm(span=fast).mean()
+        ema_slow = prices.ewm(span=slow).mean()
+        
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal).mean()
+        histogram = macd_line - signal_line
+        
+        return macd_line, signal_line, histogram
+    
+    def calculate_momentum_features(self, prices: pd.Series, periods: list = [3, 5, 10]) -> pd.DataFrame:
+        """
+        Calculate momentum features over multiple periods.
+        
+        Args:
+            prices: Price series
+            periods: List of lookback periods
+        
+        Returns:
+            DataFrame with momentum features
+        """
+        momentum_df = pd.DataFrame(index=prices.index)
+        
+        for period in periods:
+            momentum_df[f'momentum_{period}d'] = prices.pct_change(period)
+        
+        return momentum_df
+    
+    def calculate_volatility_features(self, prices: pd.Series) -> pd.DataFrame:
+        """
+        Calculate volatility features.
+        
+        Args:
+            prices: Price series
+        
+        Returns:
+            DataFrame with volatility features
+        """
+        returns = prices.pct_change()
+        
+        vol_df = pd.DataFrame(index=prices.index)
+        vol_df['volatility_20d'] = returns.rolling(20).std()
+        vol_df['volatility_5d'] = returns.rolling(5).std()
+        
+        # Volatility of volatility
+        vol_df['vol_of_vol_20d'] = (returns.rolling(20).std()).rolling(20).std()
+        
+        return vol_df
+    
     def engineer_all_features(
         self,
         data: pd.DataFrame,
@@ -273,7 +363,39 @@ class FeatureEngineer:
         # Treasury yield level
         features['treasury_level'] = data['DGS2']
         
-        # 6. Create interaction terms
+        # 6. Momentum features (NEW)
+        if self.features_config.get('momentum', {}).get('enabled', False):
+            print("  - Momentum indicators...")
+            
+            # RSI
+            rsi_period = self.features_config['momentum'].get('rsi_period', 14)
+            features[f'rsi_{rsi_period}'] = self.calculate_rsi(data['BTC-USD'], period=rsi_period)
+            
+            # MACD
+            macd_fast = self.features_config['momentum'].get('macd_fast', 12)
+            macd_slow = self.features_config['momentum'].get('macd_slow', 26)
+            macd_signal = self.features_config['momentum'].get('macd_signal', 9)
+            
+            macd_line, signal_line, histogram = self.calculate_macd(
+                data['BTC-USD'],
+                fast=macd_fast,
+                slow=macd_slow,
+                signal=macd_signal
+            )
+            features['macd_line'] = macd_line
+            features['macd_signal'] = signal_line
+            features['macd_histogram'] = histogram
+            
+            # Momentum features
+            momentum_periods = self.features_config['momentum'].get('momentum_periods', [3, 5, 10])
+            momentum_feats = self.calculate_momentum_features(data['BTC-USD'], periods=momentum_periods)
+            features = features.join(momentum_feats)
+            
+            # Volatility features
+            vol_feats = self.calculate_volatility_features(data['BTC-USD'])
+            features = features.join(vol_feats)
+        
+        # 7. Create interaction terms
         print("  - Interaction terms...")
         features = self.create_interaction_terms(features)
         
@@ -294,7 +416,9 @@ class FeatureEngineer:
     
     def create_target_variable(self, data: pd.DataFrame) -> pd.Series:
         """
-        Create target variable: next-day Bitcoin log return.
+        Create target variable: next-day or 5-day Bitcoin log return.
+        
+        Uses config to determine horizon (1-day vs 5-day).
         
         Args:
             data: DataFrame with BTC-USD prices
@@ -303,12 +427,19 @@ class FeatureEngineer:
             Log returns series
         """
         btc_prices = data['BTC-USD']
+        target_config = self.config['model']['target']
         
-        # Log return = log(P_t+1 / P_t)
-        log_return = np.log(btc_prices / btc_prices.shift(1))
+        # Determine horizon
+        if '5d' in target_config:
+            horizon = 5
+        else:
+            horizon = 1
         
-        # Shift negative to get next-day return
-        target = log_return.shift(-1)
+        # Log return = log(P_t+h / P_t)
+        log_return = np.log(btc_prices / btc_prices.shift(horizon))
+        
+        # Shift negative to get future return
+        target = log_return.shift(-horizon)
         
         return target.dropna()
 

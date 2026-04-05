@@ -81,24 +81,15 @@ class DataAcquisition:
         for symbol in symbols:
             print(f"Fetching {symbol}...")
             
-            try:
-                series = self._fetch_symbol_price_series(symbol)
-                if series is not None and not series.empty:
-                    prices[symbol] = series
-                else:
-                    print(f"Warning: No close price column found for {symbol}. Using placeholder data.")
-                    prices[symbol] = self._generate_placeholder_asset_price(symbol)
-            
-            except Exception as e:
-                print(f"Error fetching {symbol}: {e}")
-                print(f"Generating placeholder data for {symbol}...")
-                prices[symbol] = self._generate_placeholder_asset_price(symbol)
+            series = self._fetch_symbol_price_series(symbol)
+            if series is not None and not series.empty:
+                prices[symbol] = series
+            else:
+                raise ValueError(f"No close price data found for {symbol}. Real data required.")
         
         # Combine into single DataFrame
         if not prices:
-            # Ensure downstream alignment always has a valid date index.
-            for symbol in symbols:
-                prices[symbol] = self._generate_placeholder_asset_price(symbol)
+            raise ValueError("No price data fetched. Real data sources required.")
 
         df = pd.DataFrame(prices)
         df = df.sort_index()
@@ -140,9 +131,7 @@ class DataAcquisition:
             return series
         
         except Exception as e:
-            print(f"Error fetching treasury yield: {e}")
-            print("Generating placeholder data...")
-            return self._generate_placeholder_treasury()
+            raise ValueError(f"Error fetching treasury yield: {e}. Real data required.")
     
     def fetch_vix(self) -> pd.Series:
         """
@@ -170,9 +159,7 @@ class DataAcquisition:
             return vix
         
         except Exception as e:
-            print(f"Error fetching VIX: {e}")
-            print("Generating placeholder data...")
-            return self._generate_placeholder_vix()
+            raise ValueError(f"Error fetching VIX: {e}. Real data required.")
     
     def fetch_stablecoin_market_caps(self) -> pd.DataFrame:
         """
@@ -278,9 +265,7 @@ class DataAcquisition:
             return series
         
         except Exception as e:
-            print(f"Error fetching total crypto market cap: {e}")
-            print("Falling back to placeholder data...")
-            return self._generate_placeholder_crypto_mcap()
+            raise ValueError(f"Error fetching total crypto market cap: {e}. Real data required.")
     
     def fetch_institutional_events(self) -> pd.DataFrame:
         """
@@ -492,51 +477,7 @@ class DataAcquisition:
             print(f"Error parsing Binance data for {pair}: {e}")
             return None
 
-    # Placeholder data generators (for testing without API keys)
 
-    def _generate_placeholder_asset_price(self, symbol: str) -> pd.Series:
-        """Generate synthetic daily price path for BTC/ETH when market data is unavailable."""
-        dates = pd.date_range(self.start_date, self.end_date, freq='D')
-
-        seed_map = {
-            'BTC-USD': 101,
-            'ETH-USD': 102,
-        }
-        start_map = {
-            'BTC-USD': 9000.0,
-            'ETH-USD': 700.0,
-        }
-        drift_map = {
-            'BTC-USD': 0.00045,
-            'ETH-USD': 0.00055,
-        }
-        vol_map = {
-            'BTC-USD': 0.035,
-            'ETH-USD': 0.045,
-        }
-
-        np.random.seed(seed_map.get(symbol, 199))
-        n = len(dates)
-        drift = drift_map.get(symbol, 0.0004)
-        vol = vol_map.get(symbol, 0.03)
-        log_returns = drift + np.random.normal(0, vol, n)
-
-        price = np.empty(n)
-        price[0] = start_map.get(symbol, 1000.0)
-        for i in range(1, n):
-            price[i] = max(price[i - 1] * np.exp(log_returns[i]), 1.0)
-
-        # Inject known drawdown windows so stress tests remain informative.
-        dates_index = pd.DatetimeIndex(dates)
-        covid_mask = (dates_index >= '2020-03-01') & (dates_index <= '2020-03-31')
-        bear_2022_mask = (dates_index >= '2022-01-01') & (dates_index <= '2022-12-31')
-        ftx_mask = (dates_index >= '2022-11-01') & (dates_index <= '2022-11-30')
-
-        price[covid_mask] *= 0.78
-        price[bear_2022_mask] *= 0.70
-        price[ftx_mask] *= 0.82
-
-        return pd.Series(price, index=dates, name=symbol)
     
     def _fetch_bybit_ohlc(self, symbol: str) -> Optional[pd.DataFrame]:
         """
@@ -645,135 +586,13 @@ class DataAcquisition:
         except Exception as e:
             return None
     
-    def _generate_placeholder_mcap_series(self, coin_name: str, length: int) -> pd.Series:
-        """Generate synthetic market cap series for a stablecoin when real data unavailable."""
-        dates = pd.date_range(self.start_date, self.end_date, freq='D')[:length]
-        
-        np.random.seed({'BUSD': 46, 'DAI': 47}.get(coin_name, 48))
-        
-        if coin_name == 'BUSD':
-            # BUSD: peaked around 2021-2022, declined after
-            base = np.linspace(10e9, 5e9, len(dates))
-            noise = np.random.normal(0, 0.3e9, len(dates))
-        elif coin_name == 'DAI':
-            # DAI: steady growth in DeFi
-            base = np.linspace(1e9, 5e9, len(dates))
-            noise = np.random.normal(0, 0.2e9, len(dates))
-        else:
-            base = np.linspace(5e9, 20e9, len(dates))
-            noise = np.random.normal(0, 0.5e9, len(dates))
-        
-        mcap = np.maximum(base + noise, 0.1e9)
-        return pd.Series(mcap, index=dates)
-        dates = pd.date_range(self.start_date, self.end_date, freq='D')
-        
-        # Simulate treasury yield: trending upward in 2022 (Fed tightening)
-        np.random.seed(42)
-        base = 1.5  # Start around 1.5%
-        trend = np.linspace(0, 3.0, len(dates))  # Rise to ~4.5% by end
-        noise = np.random.normal(0, 0.1, len(dates))
-        
-        yield_data = base + trend + noise
-        
-        return pd.Series(yield_data, index=dates, name='DGS2')
+
     
-    def _generate_placeholder_vix(self) -> pd.Series:
-        """Generate synthetic VIX data."""
-        dates = pd.date_range(self.start_date, self.end_date, freq='D')
-        
-        # Simulate VIX: spikes during crisis periods
-        np.random.seed(43)
-        base = 15  # Normal VIX around 15
-        noise = np.random.normal(0, 3, len(dates))
-        
-        vix_data = base + noise
-        
-        # Add spikes for known crisis periods
-        # March 2020 COVID
-        covid_mask = (dates >= '2020-03-01') & (dates <= '2020-03-31')
-        vix_data[covid_mask] += 30
-        
-        # 2022 volatility
-        volatility_2022 = (dates >= '2022-01-01') & (dates <= '2022-12-31')
-        vix_data[volatility_2022] += 10
-        
-        # FTX collapse
-        ftx_mask = (dates >= '2022-11-01') & (dates <= '2022-11-30')
-        vix_data[ftx_mask] += 15
-        
-        return pd.Series(vix_data, index=dates, name='VIX')
+
     
-    def _generate_placeholder_stablecoin_mcap(self) -> pd.DataFrame:
-        """Generate synthetic stablecoin market cap data."""
-        dates = pd.date_range(self.start_date, self.end_date, freq='D')
-        
-        np.random.seed(44)
-        
-        # USDT: Largest, growing
-        usdt = np.linspace(10e9, 80e9, len(dates)) + np.random.normal(0, 1e9, len(dates))
-        
-        # USDC: Second largest
-        usdc = np.linspace(5e9, 50e9, len(dates)) + np.random.normal(0, 0.5e9, len(dates))
-        
-        # BUSD: Smaller
-        busd = np.linspace(2e9, 20e9, len(dates)) + np.random.normal(0, 0.3e9, len(dates))
-        
-        # DAI: DeFi stablecoin
-        dai = np.linspace(1e9, 10e9, len(dates)) + np.random.normal(0, 0.2e9, len(dates))
-        
-        # Spikes during crisis (capital fleeing to stablecoins)
-        covid_mask = (dates >= '2020-03-01') & (dates <= '2020-03-31')
-        usdt[covid_mask] *= 1.2
-        usdc[covid_mask] *= 1.3
-        
-        ftx_mask = (dates >= '2022-11-01') & (dates <= '2022-11-30')
-        usdc[ftx_mask] *= 1.5  # Flight to quality
-        
-        df = pd.DataFrame({
-            'USDT_MCap': usdt,
-            'USDC_MCap': usdc,
-            'BUSD_MCap': busd,
-            'DAI_MCap': dai
-        }, index=dates)
-        
-        # Total stablecoin market cap
-        df['Total_Stablecoin_MCap'] = df.sum(axis=1)
-        
-        return df
+
     
-    def _generate_placeholder_crypto_mcap(self) -> pd.Series:
-        """Generate synthetic total crypto market cap."""
-        dates = pd.date_range(self.start_date, self.end_date, freq='D')
-        
-        np.random.seed(45)
-        
-        # Simulate crypto market: volatile, bull run 2020-2021, crash 2022
-        base = 200e9  # $200B start
-        
-        # Create trend
-        trend = np.zeros(len(dates))
-        
-        for i, date in enumerate(dates):
-            if date < pd.Timestamp('2020-03-01'):
-                trend[i] = 0
-            elif date < pd.Timestamp('2021-11-01'):
-                # Bull run to $3T
-                progress = (date - pd.Timestamp('2020-03-01')).days / 600
-                trend[i] = progress * 2800e9
-            elif date < pd.Timestamp('2023-01-01'):
-                # Crash back to $1T
-                progress = (date - pd.Timestamp('2021-11-01')).days / 425
-                trend[i] = 2800e9 - progress * 1800e9
-            else:
-                # Recovery
-                trend[i] = 1000e9
-        
-        noise = np.random.normal(0, 50e9, len(dates))
-        
-        mcap = base + trend + noise
-        mcap = np.maximum(mcap, 100e9)  # Floor at $100B
-        
-        return pd.Series(mcap, index=dates, name='Total_Crypto_MCap')
+
 
 
 # Test code
