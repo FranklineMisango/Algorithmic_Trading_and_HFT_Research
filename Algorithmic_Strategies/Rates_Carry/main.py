@@ -22,12 +22,13 @@ class RatesCarryStrategy:
         # Fetch data
         yields = self.data_acq.fetch_yield_curves()
         rolldown = self.data_acq.calculate_rolldown(yields)
+        prices = self.data_acq.fetch_bond_prices()
         
         # Save
-        self.data_acq.save_data(yields, rolldown)
+        self.data_acq.save_data(yields, rolldown, prices)
         
         print("\n✓ Pipeline complete")
-        return {'yields': yields, 'rolldown': rolldown}
+        return {'yields': yields, 'rolldown': rolldown, 'prices': prices}
 
 
 if __name__ == "__main__":
