@@ -19,12 +19,18 @@ except ImportError:
 
 from config import (
     DATA_BENTO_API_KEY,
-    DATA_BENTO_USER_ID,
+    DATA_BENTO_USER_ID, 
     DATA_BENTO_PROD_NAME,
     DATA_ROOT,
     LEAN_PRICE_MULTIPLIER,
 )
+from config import DEFAULT_OUTPUT_FORMAT, RAW_FUTURES_PATH
 from utils import ensure_directory_exists, setup_logging
+try:
+    from utils import write_raw_csv, write_parquet
+except Exception:
+    write_raw_csv = None
+    write_parquet = None
 
 
 class DatabentoFuturesDownloader:
@@ -151,55 +157,15 @@ class DatabentoFuturesDownloader:
             
             self.logger.info(f"Fetching {symbol} (Databento: {databento_symbol}) futures data from {start_date.date()} to {end_date.date()} with schema {schema_to_use.name}")
             
-            # Download data from Databento
-            start_str = start_date.strftime('%Y-%m-%d')
-            end_str = end_date.strftime('%Y-%m-%d')
-
-            try:
-                data = self.client.timeseries.get_range(
-                    dataset='GLBX.MDP3',  # CME Globex dataset
-                    symbols=databento_symbol,  # Use the converted symbol format
-                    schema=schema_to_use,
-                    start=start_str,
-                    end=end_str,
-                    stype_in=SType.CONTINUOUS if '.c.' in databento_symbol else SType.RAW_SYMBOL
-                )
-            except Exception as e:
-                # Databento may return a 422 with available_start/available_end in the message
-                # e.g. schema not available for requested period. Try to parse available_end
-                # from the error and retry with a clipped end date.
-                import re
-                msg = str(e)
-                match = re.search(r'"available_end"\s*:\s*"([0-9T:\.\-Z]+)"', msg)
-                if match:
-                    try:
-                        available_end_str = match.group(1)
-                        # Parse RFC3339-ish timestamp; handle trailing Z
-                        if available_end_str.endswith('Z'):
-                            available_end = datetime.fromisoformat(available_end_str.replace('Z', '+00:00'))
-                        else:
-                            available_end = datetime.fromisoformat(available_end_str)
-
-                        # Clip the requested end date to available_end (use datetime comparison)
-                        clipped_end_date = min(end_date, available_end)
-                        clipped_end_str = clipped_end_date.strftime('%Y-%m-%d')
-                        self.logger.warning(f"Requested end {end_str} beyond dataset availability; retrying with end={clipped_end_str}")
-
-                        # Retry the request once with clipped end
-                        data = self.client.timeseries.get_range(
-                            dataset='GLBX.MDP3',
-                            symbols=databento_symbol,
-                            schema=schema_to_use,
-                            start=start_str,
-                            end=clipped_end_str,
-                            stype_in=SType.CONTINUOUS if '.c.' in databento_symbol else SType.RAW_SYMBOL
-                        )
-                    except Exception:
-                        self.logger.error(f"Databento request failed and could not parse available_end: {e}")
-                        return pd.DataFrame()
-                else:
-                    self.logger.error(f"Databento request failed: {e}")
-                    return pd.DataFrame()
+            # Download data from Databento  
+            data = self.client.timeseries.get_range(
+                dataset='GLBX.MDP3',  # CME Globex dataset
+                symbols=databento_symbol,  # Use the converted symbol format
+                schema=schema_to_use,
+                start=start_date.strftime('%Y-%m-%d'),
+                end=end_date.strftime('%Y-%m-%d'),
+                stype_in=SType.CONTINUOUS if '.c.' in databento_symbol else SType.RAW_SYMBOL
+            )
             
             # Convert to DataFrame
             if data is None:
@@ -359,11 +325,13 @@ class DatabentoFuturesDownloader:
             self.logger.debug(f"Saved {len(day_data)} records to {filepath}")
     
     def download_symbols(self, symbols: List[str], start_date: datetime, end_date: datetime, 
-                        resolution: str = 'daily', save_format: str = 'lean') -> Dict[str, pd.DataFrame]:
+                        resolution: str = 'daily', output_format: Optional[str] = None) -> Dict[str, pd.DataFrame]:
         """Download multiple futures symbols"""
         results = {}
-        
-        self.logger.info(f"Starting download of {len(symbols)} symbols from {start_date.date()} to {end_date.date()}")
+        if output_format is None:
+            output_format = DEFAULT_OUTPUT_FORMAT
+
+        self.logger.info(f"Starting download of {len(symbols)} symbols from {start_date.date()} to {end_date.date()} (format={output_format})")
         
         for symbol in tqdm(symbols, desc="Downloading futures data"):
             try:
@@ -373,11 +341,33 @@ class DatabentoFuturesDownloader:
                 if not df.empty:
                     # Format for Lean
                     lean_df = self.format_for_lean(df, symbol)
-                    
-                    if save_format == 'lean':
+
+                    if output_format in ['lean', 'lean_zip']:
                         # Save to Lean format
                         self.save_to_lean_format(lean_df, symbol, resolution)
-                    
+                    elif output_format in ['raw', 'csv', 'raw_csv']:
+                        ensure_directory_exists(RAW_FUTURES_PATH)
+                        raw_path = os.path.join(RAW_FUTURES_PATH, f"{symbol.replace('.','_').lower()}_{resolution}.csv")
+                        if write_raw_csv is not None:
+                            records = []
+                            for idx, row in df.reset_index().iterrows():
+                                records.append({'timestamp': row.get('timestamp', idx),
+                                                'open': row.get('open'), 'high': row.get('high'),
+                                                'low': row.get('low'), 'close': row.get('close'),
+                                                'volume': row.get('volume', 0)})
+                            write_raw_csv(records, raw_path)
+                        else:
+                            df.to_csv(raw_path, index=True)
+                        self.logger.info(f"Saved raw CSV to {raw_path}")
+                    elif output_format == 'parquet' and write_parquet is not None:
+                        ensure_directory_exists(RAW_FUTURES_PATH)
+                        raw_path = os.path.join(RAW_FUTURES_PATH, f"{symbol.replace('.','_').lower()}_{resolution}.parquet")
+                        try:
+                            df.reset_index().to_parquet(raw_path, index=False)
+                            self.logger.info(f"Saved parquet to {raw_path}")
+                        except Exception as e:
+                            self.logger.error(f"Failed to write parquet for {symbol}: {e}")
+
                     results[symbol] = lean_df
                     self.logger.info(f"Successfully processed {symbol}: {len(lean_df)} records")
                 else:
@@ -430,28 +420,3 @@ class DatabentoFuturesDownloader:
         except Exception as e:
             self.logger.error(f"Failed to connect to Databento API: {e}")
             return False
-
-
-if __name__ == "__main__":
-    # Test the downloader
-    downloader = DatabentoFuturesDownloader()
-    
-    # Test connection
-    if downloader.test_connection():
-        print("✓ Connection to Databento successful")
-        
-        # Test downloading a single symbol
-        test_symbol = "ES.FUT"
-        start_date = datetime.now() - timedelta(days=7)
-        end_date = datetime.now()
-        
-        print(f"Testing download of {test_symbol}...")
-        data = downloader.get_futures_data(test_symbol, start_date, end_date, resolution='daily')
-        
-        if not data.empty:
-            print(f"✓ Successfully downloaded {len(data)} records")
-            print(data.head())
-        else:
-            print("✗ No data returned")
-    else:
-        print("✗ Failed to connect to Databento")

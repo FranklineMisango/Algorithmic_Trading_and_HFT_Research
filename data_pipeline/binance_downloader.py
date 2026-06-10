@@ -18,8 +18,9 @@ from config import (
 )
 from utils import (
     setup_logging, ensure_directory_exists, format_lean_date,
-    create_lean_crypto_csv, write_lean_zip_file, DataValidator
+    create_lean_crypto_csv, write_lean_zip_file, DataValidator, write_raw_csv, write_parquet
 )
+from config import DEFAULT_OUTPUT_FORMAT
 
 logger = setup_logging()
 
@@ -41,12 +42,15 @@ class BinanceDataDownloader:
             # Convert interval to Binance format
             binance_interval = self._convert_interval(interval)
             
-            # Get data from Binance
+            # Get data from Binance - using timestamps to avoid date parsing issues
+            start_timestamp = int(start_date.timestamp() * 1000)  # Convert to milliseconds
+            end_timestamp = int(end_date.timestamp() * 1000)      # Convert to milliseconds
+            
             klines = self.client.get_historical_klines(
                 symbol,
                 binance_interval,
-                start_date.strftime('%Y-%m-%d'),
-                end_date.strftime('%Y-%m-%d')
+                start_timestamp,
+                end_timestamp
             )
             
             # Convert to our format
@@ -82,10 +86,14 @@ class BinanceDataDownloader:
         
         return interval_map.get(interval, '1m')
     
-    def download_symbol_data(self, symbol: str, resolution: str, start_date: datetime, end_date: datetime):
+    def download_symbol_data(self, symbol: str, resolution: str, start_date: datetime, end_date: datetime,
+                           lean_format: bool = True, output_folder: str = "data", output_format: Optional[str] = None):
         """Download and save data for a single symbol"""
         logger.info(f"Downloading {symbol} data for {resolution} resolution")
         
+        if output_format is None:
+            output_format = DEFAULT_OUTPUT_FORMAT if not lean_format else ('lean' if lean_format else 'raw')
+
         if resolution == 'daily' or resolution == 'hour':
             # For daily/hour, save all data in one file
             data = self.get_klines(symbol, resolution, start_date, end_date)
@@ -95,8 +103,16 @@ class BinanceDataDownloader:
                 cleaned_data = DataValidator.clean_ohlcv_data(data)
                 
                 if cleaned_data:
-                    output_path = os.path.join(CRYPTO_DATA_PATH, resolution, f"{symbol.lower()}.zip")
-                    csv_filename = f"{symbol.lower()}_{resolution}_trade.csv"
+                    # Determine output path based on format
+                    if output_format in ['lean', 'lean_zip']:
+                        from config import CRYPTO_DATA_PATH
+                        base_path = CRYPTO_DATA_PATH
+                        csv_filename = f"{symbol.lower()}_{resolution}_trade.csv"
+                        output_path = os.path.join(base_path, resolution, f"{symbol.lower()}.zip")
+                    else:
+                        base_path = os.path.join(output_folder, "crypto")
+                        ensure_directory_exists(base_path)
+                        output_path = os.path.join(base_path, resolution, f"{symbol.lower()}.{ 'parquet' if output_format=='parquet' else 'csv'}")
                     
                     # Group data by date for processing
                     daily_data = {}
@@ -112,10 +128,18 @@ class BinanceDataDownloader:
                         date_bars = daily_data[date_key]
                         csv_content = create_lean_crypto_csv(date_bars, symbol, date_bars[0]['timestamp'], resolution)
                         all_csv_content.extend(csv_content)
-                    
+
                     if all_csv_content:
-                        write_lean_zip_file(all_csv_content, output_path, csv_filename)
-                        logger.info(f"Saved {len(all_csv_content)} bars for {symbol} {resolution}")
+                        if output_format in ['lean', 'lean_zip']:
+                            write_lean_zip_file(all_csv_content, output_path, csv_filename)
+                            logger.info(f"Saved LEAN zip ({output_path}) for {symbol} {resolution}")
+                        elif output_format in ['raw', 'csv', 'raw_csv']:
+                            # flatten cleaned_data for writing
+                            write_raw_csv(cleaned_data, output_path)
+                            logger.info(f"Saved raw CSV ({output_path}) for {symbol} {resolution}")
+                        elif output_format == 'parquet':
+                            write_parquet(cleaned_data, output_path)
+                            logger.info(f"Saved parquet ({output_path}) for {symbol} {resolution}")
         
         else:
             # For minute/second, save data by date
@@ -123,7 +147,7 @@ class BinanceDataDownloader:
             
             while current_date <= end_date:
                 date_start = current_date.replace(hour=0, minute=0, second=0)
-                date_end = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0)
+                date_end = current_date.replace(hour=23, minute=59, second=59)
                 
                 data = self.get_klines(symbol, resolution, date_start, date_end)
                 
@@ -132,39 +156,79 @@ class BinanceDataDownloader:
                     cleaned_data = DataValidator.clean_ohlcv_data(data)
                     
                     if cleaned_data:
-                        # Create directory structure
-                        symbol_dir = os.path.join(CRYPTO_DATA_PATH, resolution, symbol.lower())
-                        ensure_directory_exists(symbol_dir)
-                        
-                        # Create file paths
-                        date_str = format_lean_date(current_date)
-                        output_path = os.path.join(symbol_dir, f"{date_str}_trade.zip")
-                        csv_filename = f"{date_str}_{symbol.lower()}_{resolution}_trade.csv"
-                        
-                        # Convert to Lean format
-                        csv_content = create_lean_crypto_csv(cleaned_data, symbol, current_date, resolution)
-                        
-                        if csv_content:
-                            write_lean_zip_file(csv_content, output_path, csv_filename)
-                            logger.debug(f"Saved {len(csv_content)} bars for {symbol} on {date_str}")
+                        # Create directory structure for LEAN intraday
+                        if output_format in ['lean', 'lean_zip']:
+                            symbol_dir = os.path.join(CRYPTO_DATA_PATH, resolution, symbol.lower())
+                            ensure_directory_exists(symbol_dir)
+
+                            # Create file paths
+                            date_str = format_lean_date(current_date)
+                            output_path = os.path.join(symbol_dir, f"{date_str}_trade.zip")
+                            csv_filename = f"{date_str}_{symbol.lower()}_{resolution}_trade.csv"
+
+                            # Convert to Lean format
+                            csv_content = create_lean_crypto_csv(cleaned_data, symbol, current_date, resolution)
+
+                            if csv_content:
+                                write_lean_zip_file(csv_content, output_path, csv_filename)
+                                logger.debug(f"Saved LEAN zip ({output_path}) for {symbol} on {date_str}")
+                        else:
+                            # Raw or parquet: write all cleaned_data for the date
+                            base_path = os.path.join(output_folder, "crypto", resolution)
+                            ensure_directory_exists(base_path)
+                            date_str = format_lean_date(current_date)
+                            raw_path = os.path.join(base_path, f"{symbol.lower()}_{date_str}.{ 'parquet' if output_format=='parquet' else 'csv'}")
+                            if output_format in ['raw', 'csv', 'raw_csv']:
+                                write_raw_csv(cleaned_data, raw_path)
+                                logger.debug(f"Saved raw CSV ({raw_path}) for {symbol} on {date_str}")
+                            elif output_format == 'parquet':
+                                write_parquet(cleaned_data, raw_path)
+                                logger.debug(f"Saved parquet ({raw_path}) for {symbol} on {date_str}")
                 
                 current_date += timedelta(days=1)
                 
                 # Rate limiting
                 time.sleep(self.rate_limit_delay)
     
-    def download_multiple_symbols(self, symbols: List[str], resolution: str, start_date: datetime, end_date: datetime):
-        """Download data for multiple symbols"""
-        logger.info(f"Starting download for {len(symbols)} symbols")
-        
+    def download_multiple_symbols(self, symbols: List[str], resolution: str, start_date: datetime, end_date: datetime, output_format: Optional[str] = None):
+        """Download data for multiple symbols and pass output_format to per-symbol downloader"""
+        if output_format is None:
+            output_format = DEFAULT_OUTPUT_FORMAT
+
+        logger.info(f"Starting download for {len(symbols)} symbols (format={output_format})")
+
         for symbol in tqdm(symbols, desc="Downloading symbols"):
             try:
-                self.download_symbol_data(symbol, resolution, start_date, end_date)
+                self.download_symbol_data(symbol, resolution, start_date, end_date, output_format=output_format)
             except Exception as e:
                 logger.error(f"Error downloading {symbol}: {str(e)}")
                 continue
-        
+
         logger.info("Download completed")
+    
+    def download_crypto_symbols(self, symbols: List[str], start_date: datetime, end_date: datetime, 
+                              resolution: str = 'daily', lean_format: bool = True, output_folder: str = "data"):
+        """Download crypto symbols (orchestrator-compatible method)"""
+        logger.info(f"Starting crypto download for {len(symbols)} symbols from Binance")
+        logger.info(f"Output: {'Lean format' if lean_format else 'Raw format'} in {output_folder}/ folder")
+        downloaded_files = []
+        
+        for symbol in symbols:
+            try:
+                # Use the existing download method with custom folder
+                self.download_symbol_data(symbol, resolution, start_date, end_date, 
+                                        lean_format=lean_format, output_folder=output_folder)
+                # Generate expected filename pattern
+                folder_prefix = f"{output_folder}/crypto/{resolution}/"
+                filename = f"{folder_prefix}{symbol}_{resolution}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.zip"
+                downloaded_files.append(filename)
+                logger.info(f"SUCCESS: Downloaded {symbol}")
+            except Exception as e:
+                logger.error(f"ERROR: Error downloading {symbol}: {str(e)}")
+                continue
+        
+        logger.info(f"Crypto download completed: {len(downloaded_files)} files")
+        return downloaded_files
     
     def get_available_symbols(self) -> List[str]:
         """Get list of available USDT trading pairs"""
@@ -183,23 +247,3 @@ class BinanceDataDownloader:
         except Exception as e:
             logger.error(f"Error getting symbols: {str(e)}")
             return []
-
-def main():
-    """Main function for testing"""
-    from config import DEFAULT_CRYPTO_SYMBOLS, DEFAULT_START_DATE, DEFAULT_END_DATE
-    
-    downloader = BinanceDataDownloader()
-    
-    # Test with a small set of symbols
-    test_symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT']
-    test_start = datetime.now() - timedelta(days=30)
-    test_end = datetime.now()
-    
-    # Download minute data
-    downloader.download_multiple_symbols(test_symbols, 'minute', test_start, test_end)
-    
-    # Download daily data
-    downloader.download_multiple_symbols(test_symbols, 'daily', test_start, test_end)
-
-if __name__ == "__main__":
-    main()

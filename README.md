@@ -133,6 +133,17 @@ Algorithmic_Trading_and_HFT_Research/
 └── README.md                       # This file
 ```
 
+## Data Pipeline
+
+The `Data_Pipeline` folder contains downloaders for multiple data providers and helpers to convert data into LEAN-compatible formats. The pipeline now supports multiple output formats controlled by the CLI flag `--output-format` (or the `DEFAULT_OUTPUT_FORMAT` env var in `Data_Pipeline/config.py`):
+
+- `lean`: produce QuantConnect LEAN zip trade/quote files (historical behavior)
+- `raw` or `csv`: produce flat CSV files under the `data_chest/` directory (recommended for strategy unit tests)
+- `parquet`: produce Parquet files (requires `pyarrow` or `fastparquet`)
+
+Raw outputs are written under the `data_chest/` folder. See `Data_Pipeline/config.py` for exact paths (e.g. `RAW_STOCKS_PATH`, `RAW_CRYPTO_PATH`).
+
+
 ## Installation
 
 ### Prerequisites

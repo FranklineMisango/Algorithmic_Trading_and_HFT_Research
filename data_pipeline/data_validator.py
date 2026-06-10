@@ -14,8 +14,8 @@ from utils import setup_logging
 
 logger = setup_logging()
 
-class DataValidator:
-    """Validate and analyze downloaded data"""
+class LeanDataValidator:
+    """Validate and analyze downloaded LEAN data files"""
     
     def __init__(self):
         self.equity_path = EQUITY_DATA_PATH
@@ -60,13 +60,22 @@ class DataValidator:
                 with zip_file.open(csv_filename) as csv_file:
                     df = pd.read_csv(csv_file, header=None)
                     
-                    # Validate CSV structure
-                    if df.shape[1] != 6:
-                        results['errors'].append(f"Expected 6 columns, got {df.shape[1]}")
+                    # Detect data type and validate CSV structure
+                    if df.shape[1] == 6:
+                        # TradeBar format (equity/crypto): Time, Open, High, Low, Close, Volume
+                        df.columns = ['Time', 'Open', 'High', 'Low', 'Close', 'Volume']
+                        data_type = 'tradebar'
+                    elif df.shape[1] == 8:
+                        # QuoteBar format (forex): Time, BidOpen, BidHigh, BidLow, BidClose, AskOpen, AskHigh, AskLow, AskClose
+                        df.columns = ['Time', 'BidOpen', 'BidHigh', 'BidLow', 'BidClose', 'AskOpen', 'AskHigh', 'AskLow', 'AskClose']
+                        data_type = 'quotebar'
+                    elif df.shape[1] == 7:
+                        # Options format: Time, Open, High, Low, Close, Volume, OpenInterest
+                        df.columns = ['Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'OpenInterest']
+                        data_type = 'options'
+                    else:
+                        results['errors'].append(f"Unsupported column count: {df.shape[1]}. Expected 6 (TradeBar), 7 (Options), or 8 (QuoteBar)")
                         return results
-                    
-                    # Set column names
-                    df.columns = ['Time', 'Open', 'High', 'Low', 'Close', 'Volume']
                     
                     # Basic validation
                     results['bar_count'] = len(df)
@@ -75,30 +84,64 @@ class DataValidator:
                         results['errors'].append("No data rows found")
                         return results
                     
-                    # Validate OHLC logic
-                    invalid_ohlc = df[(df['Low'] > df['Open']) | 
-                                     (df['Low'] > df['High']) | 
-                                     (df['Low'] > df['Close']) | 
-                                     (df['High'] < df['Open']) | 
-                                     (df['High'] < df['Close'])]
-                    
-                    if len(invalid_ohlc) > 0:
-                        results['errors'].append(f"Invalid OHLC data in {len(invalid_ohlc)} rows")
-                    
-                    # Validate volume
-                    negative_volume = df[df['Volume'] < 0]
-                    if len(negative_volume) > 0:
-                        results['errors'].append(f"Negative volume in {len(negative_volume)} rows")
-                    
-                    # Calculate statistics
-                    results['date_range'] = (df['Time'].min(), df['Time'].max())
-                    results['price_range'] = (df['Close'].min(), df['Close'].max())
-                    results['volume_stats'] = {
-                        'total': df['Volume'].sum(),
-                        'avg': df['Volume'].mean(),
-                        'max': df['Volume'].max(),
-                        'min': df['Volume'].min()
-                    }
+                    # Validate data based on type
+                    if data_type == 'tradebar' or data_type == 'options':
+                        # Validate OHLC logic for TradeBar and Options
+                        invalid_ohlc = df[(df['Low'] > df['Open']) | 
+                                         (df['Low'] > df['High']) | 
+                                         (df['Low'] > df['Close']) | 
+                                         (df['High'] < df['Open']) | 
+                                         (df['High'] < df['Close'])]
+                        
+                        if len(invalid_ohlc) > 0:
+                            results['errors'].append(f"Invalid OHLC data in {len(invalid_ohlc)} rows")
+                        
+                        # Validate volume
+                        negative_volume = df[df['Volume'] < 0]
+                        if len(negative_volume) > 0:
+                            results['errors'].append(f"Negative volume in {len(negative_volume)} rows")
+                        
+                        # Calculate statistics
+                        results['date_range'] = (df['Time'].min(), df['Time'].max())
+                        results['price_range'] = (df['Close'].min(), df['Close'].max())
+                        results['volume_stats'] = {
+                            'total': df['Volume'].sum(),
+                            'avg': df['Volume'].mean(),
+                            'max': df['Volume'].max(),
+                            'min': df['Volume'].min()
+                        }
+                        
+                    elif data_type == 'quotebar':
+                        # Validate QuoteBar (forex) data
+                        # Check bid/ask spread validity
+                        invalid_spread = df[df['AskOpen'] < df['BidOpen']]
+                        if len(invalid_spread) > 0:
+                            results['errors'].append(f"Invalid bid/ask spread in {len(invalid_spread)} rows")
+                        
+                        # Validate bid OHLC logic
+                        invalid_bid_ohlc = df[(df['BidLow'] > df['BidOpen']) | 
+                                             (df['BidLow'] > df['BidHigh']) | 
+                                             (df['BidLow'] > df['BidClose']) | 
+                                             (df['BidHigh'] < df['BidOpen']) | 
+                                             (df['BidHigh'] < df['BidClose'])]
+                        
+                        if len(invalid_bid_ohlc) > 0:
+                            results['errors'].append(f"Invalid bid OHLC data in {len(invalid_bid_ohlc)} rows")
+                        
+                        # Validate ask OHLC logic
+                        invalid_ask_ohlc = df[(df['AskLow'] > df['AskOpen']) | 
+                                             (df['AskLow'] > df['AskHigh']) | 
+                                             (df['AskLow'] > df['AskClose']) | 
+                                             (df['AskHigh'] < df['AskOpen']) | 
+                                             (df['AskHigh'] < df['AskClose'])]
+                        
+                        if len(invalid_ask_ohlc) > 0:
+                            results['errors'].append(f"Invalid ask OHLC data in {len(invalid_ask_ohlc)} rows")
+                        
+                        # Calculate statistics for QuoteBar
+                        results['date_range'] = (df['Time'].min(), df['Time'].max())
+                        results['price_range'] = (df['BidClose'].min(), df['AskClose'].max())
+                        results['volume_stats'] = None  # No volume for forex
                     
                     # Time validation
                     if not df['Time'].is_monotonic_increasing:
@@ -235,7 +278,7 @@ class DataValidator:
 
 def main():
     """Main function for data validation"""
-    validator = DataValidator()
+    validator = LeanDataValidator()
     
     print("Validating LEAN data files...")
     results = validator.validate_all_data()

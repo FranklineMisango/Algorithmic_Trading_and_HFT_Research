@@ -8,14 +8,10 @@
 *.synctex.gz
 *.dvi
 *.ps
-<<<<<<< HEAD
 *.bbl
 *.sty
 *.blg
 *.cls
-=======
-*.json
->>>>>>> 6ea27e8 (fix put futures spread arbitrage scripts)
 
 
 #block every paper folder inside

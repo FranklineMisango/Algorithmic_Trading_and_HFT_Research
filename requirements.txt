@@ -114,4 +114,6 @@ wandb
 websocket-client
 xgboost
 yfinance
+pyarrow
+fastparquet
 accelerate

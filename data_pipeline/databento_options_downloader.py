@@ -22,7 +22,13 @@ from config import (
     DATA_ROOT,
     LEAN_PRICE_MULTIPLIER,
 )
+from config import DEFAULT_OUTPUT_FORMAT, RAW_OPTIONS_PATH
 from utils import ensure_directory_exists, setup_logging
+try:
+    from utils import write_raw_csv, write_parquet
+except Exception:
+    write_raw_csv = None
+    write_parquet = None
 
 
 class DatabentoOptionsDownloader:
@@ -59,7 +65,7 @@ class DatabentoOptionsDownloader:
     def download_options(self, underlying: str, start_date: datetime, end_date: datetime,
                         resolution: str = 'daily', schema: str = 'trades', 
                         limit_contracts: Optional[int] = None,
-                        filter_near_money: bool = True) -> None:
+                        filter_near_money: bool = True, output_format: Optional[str] = None) -> None:
         """
         Download options data for a given underlying symbol
         
@@ -74,6 +80,9 @@ class DatabentoOptionsDownloader:
         """
         self.logger.info(f"Downloading Databento options for {underlying} from {start_date.date()} to {end_date.date()}")
         
+        if output_format is None:
+            output_format = DEFAULT_OUTPUT_FORMAT
+
         try:
             # Step 1: Get all option contract definitions for the underlying
             option_contracts = self._get_option_definitions(underlying, start_date, end_date)
@@ -294,16 +303,32 @@ class DatabentoOptionsDownloader:
             resolution_dir = 'daily' if 'ohlcv-1d' in schema else 'minute' if 'ohlcv-1m' in schema else 'tick'
             option_dir = os.path.join(self.data_path, underlying.lower(), resolution_dir)
             ensure_directory_exists(option_dir)
-            
+
             # Create filename (simplified for this example)
-            # Real implementation would follow Lean's naming convention
             date_str = datetime.now().strftime('%Y%m%d')
             filename = f"{symbol.replace(' ', '_')}_{date_str}.csv"
             filepath = os.path.join(option_dir, filename)
-            
-            # Save to CSV
-            processed_df.to_csv(filepath, index=False)
-            self.logger.debug(f"Saved {len(processed_df)} records to {filepath}")
+
+            if output_format in ['lean', 'lean_zip']:
+                # Save Lean-compatible CSV
+                processed_df.to_csv(filepath, index=False)
+                self.logger.debug(f"Saved {len(processed_df)} records to {filepath} (lean)")
+            elif output_format in ['raw', 'csv', 'raw_csv']:
+                ensure_directory_exists(RAW_OPTIONS_PATH)
+                raw_path = os.path.join(RAW_OPTIONS_PATH, f"{symbol.replace(' ','_')}_{date_str}.csv")
+                if write_raw_csv is not None:
+                    write_raw_csv(processed_df.to_dict('records'), raw_path)
+                else:
+                    processed_df.to_csv(raw_path, index=False)
+                self.logger.debug(f"Saved {len(processed_df)} records to {raw_path} (raw)")
+            elif output_format == 'parquet' and write_parquet is not None:
+                ensure_directory_exists(RAW_OPTIONS_PATH)
+                raw_path = os.path.join(RAW_OPTIONS_PATH, f"{symbol.replace(' ','_')}_{date_str}.parquet")
+                try:
+                    processed_df.to_parquet(raw_path, index=False)
+                    self.logger.debug(f"Saved {len(processed_df)} records to {raw_path} (parquet)")
+                except Exception as e:
+                    self.logger.error(f"Failed to write parquet for options {symbol}: {e}")
             
         except Exception as e:
             self.logger.error(f"Error saving option data for {contract.get('symbol', 'unknown')}: {e}")

@@ -17,7 +17,13 @@ from config import (
     DATA_ROOT,
     LEAN_PRICE_MULTIPLIER,
 )
+from config import DEFAULT_OUTPUT_FORMAT, RAW_FUTURES_PATH
 from utils import ensure_directory_exists, setup_logging
+try:
+    from utils import write_parquet, write_raw_csv
+except Exception:
+    write_parquet = None
+    write_raw_csv = None
 
 
 class PolygonFuturesDownloader:
@@ -202,25 +208,51 @@ class PolygonFuturesDownloader:
         self.logger.info(f"Saved {len(df)} total records for {symbol}")
     
     def download_futures_symbol(self, symbol: str, start_date: datetime, end_date: datetime,
-                               resolution: str = 'daily'):
+                               resolution: str = 'daily', output_format: Optional[str] = None):
         """Download futures data for a single symbol"""
-        self.logger.info(f"Downloading {resolution} futures data for {symbol}")
-        
+        if output_format is None:
+            output_format = DEFAULT_OUTPUT_FORMAT
+        self.logger.info(f"Downloading {resolution} futures data for {symbol} (format={output_format})")
+
         # Get the appropriate ticker
         ticker = self.get_futures_ticker(symbol)
-        
+
         # Download price data
         df = self.get_futures_data(ticker, start_date, end_date, resolution)
-        
+
         if df.empty:
             self.logger.warning(f"No data available for {symbol}")
             return
-        
+
         # Format for Lean
         lean_df = self.format_for_lean(df, symbol)
-        
+
         # Save to files
-        self.save_to_lean_format(lean_df, symbol, resolution)
+        if output_format in ['lean', 'lean_zip']:
+            self.save_to_lean_format(lean_df, symbol, resolution)
+        elif output_format in ['raw', 'csv', 'raw_csv']:
+            ensure_directory_exists(RAW_FUTURES_PATH)
+            raw_path = os.path.join(RAW_FUTURES_PATH, f"{symbol.lower()}_{resolution}.csv")
+            if write_raw_csv is not None:
+                # Convert dataframe to list-of-dicts with timestamp
+                records = []
+                for idx, row in df.reset_index().iterrows():
+                    records.append({'timestamp': row['timestamp'] if 'timestamp' in row else idx,
+                                    'open': row.get('open', None), 'high': row.get('high', None),
+                                    'low': row.get('low', None), 'close': row.get('close', None),
+                                    'volume': row.get('volume', 0)})
+                write_raw_csv(records, raw_path)
+            else:
+                df.to_csv(raw_path, index=True)
+            self.logger.info(f"Saved raw CSV to {raw_path}")
+        elif output_format == 'parquet' and write_parquet is not None:
+            ensure_directory_exists(RAW_FUTURES_PATH)
+            raw_path = os.path.join(RAW_FUTURES_PATH, f"{symbol.lower()}_{resolution}.parquet")
+            try:
+                df.reset_index().to_parquet(raw_path, index=False)
+                self.logger.info(f"Saved parquet to {raw_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to write parquet for {symbol}: {e}")
     
     def download_symbols(self, symbols: List[str], start_date: datetime, end_date: datetime,
                         resolution: str = 'daily'):
@@ -239,21 +271,3 @@ class PolygonFuturesDownloader:
                 continue
         
         self.logger.info("Futures download completed")
-
-
-def main():
-    """Main function for testing"""
-    downloader = PolygonFuturesDownloader()
-    
-    # Test with popular futures
-    start_date = datetime.now() - timedelta(days=7)
-    end_date = datetime.now()
-    
-    # Test symbols
-    test_symbols = ['ES', 'NQ']
-    
-    downloader.download_symbols(test_symbols, start_date, end_date, 'daily')
-
-
-if __name__ == "__main__":
-    main()
