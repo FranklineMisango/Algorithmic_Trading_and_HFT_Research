@@ -64,6 +64,7 @@ RAW_ETFS_PATH = os.path.join(DATA_CHEST, 'etf')
 RAW_OPTIONS_PATH = os.path.join(DATA_CHEST, 'options')
 RAW_MACRO_PATH = os.path.join(DATA_CHEST, 'macro')
 RAW_FUNDAMENTALS_PATH = os.path.join(DATA_CHEST, 'fundamentals')
+RAW_MARKET_PATH = os.path.join(DATA_CHEST, 'market')
 
 DEFAULT_START_DATE = datetime.now() - timedelta(days=365)  # 1 year of data
 DEFAULT_END_DATE = datetime.now()

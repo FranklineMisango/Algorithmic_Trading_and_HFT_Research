@@ -1,11 +1,12 @@
 # LEAN Data Pipeline
 
-This data pipeline downloads financial data from Alpaca (for US equities) and Binance (for cryptocurrencies) and converts it to LEAN format for backtesting.
+This data pipeline downloads financial data from Alpaca (for US equities), Binance (for cryptocurrencies), and reference macro series. It can write LEAN-compatible ZIPs or flat raw/Parquet outputs for strategy research.
 
 ## Features
 
 - **Alpaca Integration**: Download US equity data (OHLCV) from Alpaca Markets
-- **Binance Integration**: Download cryptocurrency data (OHLCV) from Binance
+- **Binance Integration**: Download spot and market data (OHLCV) from Binance
+- **Market-Data Puller**: Download spot prices, perpetual futures prices, funding rates, and reference rates for crypto arbitrage research
 - **Lean Format**: Automatically converts data to LEAN's CSV format with proper compression
 - **Multiple Resolutions**: Supports minute, hour, and daily data
 - **Rate Limiting**: Built-in rate limiting to respect API limits
@@ -84,6 +85,15 @@ python main.py --source binance \
                --start-date 2024-06-01 \
                --end-date 2024-07-01 \
                --resolution hour
+
+# Pull spot, perp, funding, and reference rates for crypto arbitrage research
+python binance_market_pull.py \
+               --symbols SOLUSDT BNBUSDT XRPUSDT ADAUSDT DOGEUSDT BTCUSDT ETHUSDT \
+               --start-date 2026-05-01 \
+               --end-date 2026-06-10 \
+               --interval 1h \
+               --output-format raw \
+               --include-reference-rates
 ```
 
 ### Command Line Options
@@ -113,6 +123,12 @@ The pipeline converts data to LEAN's standard format:
 - **Filename**: `YYYYMMDD_trade.zip` (for minute/hour) or `symbol.zip` (for daily)
 - **Fields**: Time (ms since midnight), Open, High, Low, Close, Volume
 - **Price Format**: Actual prices (no conversion)
+
+### Crypto Market Data (Binance)
+- **Location**: `data_chest/market/spot/`, `data_chest/market/perp/`, `data_chest/market/funding/`
+- **Reference Rates**: `data_chest/macro/` for risk-free series and `data_chest/market/borrow/` for borrow-rate exports
+- **Formats**: CSV or Parquet
+- **Runner**: `binance_market_pull.py`
 
 ## Directory Structure
 
